@@ -6,6 +6,7 @@ __pycache__/
 # User data (created at runtime)
 .app_config.json
 .card_urls.json
+.ebay_config.json
 Fotos/
 Karten/
 Pokemon-Inventar.xlsx

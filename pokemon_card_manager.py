@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
+import base64
 import json
 import os
 import re
 import shutil
 import socket
 import threading
+import time as _time
 import tkinter as tk
+import urllib.error
+import urllib.request
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from tkinter import ttk, messagebox, simpledialog, filedialog
@@ -73,6 +77,17 @@ GRADE_ALIASES = {
     "B10": "Black Label 10", "B 10": "Black Label 10",
 }
 
+# eBay API
+EBAY_CONFIG_PATH = os.path.join(BASE_DIR, ".ebay_config.json")
+EBAY_OAUTH_PORT = 8089
+EBAY_SCOPES = ("https://api.ebay.com/oauth/api_scope/sell.inventory"
+               " https://api.ebay.com/oauth/api_scope/sell.account")
+
+CONDITION_TO_EBAY = {
+    "Mint": "2750", "Near Mint": "2750", "Excellent": "3000",
+    "Good": "4000", "Light Played": "5000", "Played": "5000", "Poor": "5000",
+}
+
 
 def parse_grade(grade_str):
     upper = grade_str.upper().strip()
@@ -99,6 +114,7 @@ def _match_set_name(slug):
 def parse_cardmarket_url(url):
     url = url.strip()
 
+    # Singles: /Products/Singles/{SetSlug}/{CardSlug}
     m_singles = re.search(
         r"cardmarket\.com/\w+/Pokemon/Products/Singles/([^/]+)/([^/?#]+)", url
     )
@@ -124,6 +140,7 @@ def parse_cardmarket_url(url):
             "number": card_code,
         }
 
+    # Sealed products: /Products/{Type}/{ProductSlug}  (Boosters, Booster-Boxes, etc.)
     m_sealed = re.search(
         r"cardmarket\.com/\w+/Pokemon/Products/([^/]+)/([^/?#]+)", url
     )
@@ -507,6 +524,234 @@ def get_card_url(card_id):
     return _load_urls().get(str(card_id))
 
 
+# ============================================================
+# EBAY API
+# ============================================================
+
+def _load_ebay_config():
+    try:
+        with open(EBAY_CONFIG_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_ebay_config(cfg):
+    with open(EBAY_CONFIG_PATH, "w") as f:
+        json.dump(cfg, f)
+
+
+def _ebay_base(cfg):
+    return "https://api.sandbox.ebay.com" if cfg.get("sandbox") else "https://api.ebay.com"
+
+
+def _ebay_auth_base(cfg):
+    return "https://auth.sandbox.ebay.com" if cfg.get("sandbox") else "https://auth.ebay.com"
+
+
+def _ebay_exchange_code(auth_code):
+    cfg = _load_ebay_config()
+    creds = base64.b64encode(f"{cfg['client_id']}:{cfg['client_secret']}".encode()).decode()
+    data = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": auth_code,
+        "redirect_uri": cfg["ru_name"],
+    }).encode()
+    req = urllib.request.Request(
+        f"{_ebay_base(cfg)}/identity/v1/oauth2/token",
+        data=data,
+        headers={"Authorization": f"Basic {creds}",
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    cfg["access_token"] = result["access_token"]
+    cfg["refresh_token"] = result.get("refresh_token", "")
+    cfg["token_expiry"] = _time.time() + result.get("expires_in", 7200)
+    _save_ebay_config(cfg)
+
+
+def _ebay_refresh():
+    cfg = _load_ebay_config()
+    creds = base64.b64encode(f"{cfg['client_id']}:{cfg['client_secret']}".encode()).decode()
+    data = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": cfg["refresh_token"],
+        "scope": EBAY_SCOPES,
+    }).encode()
+    req = urllib.request.Request(
+        f"{_ebay_base(cfg)}/identity/v1/oauth2/token",
+        data=data,
+        headers={"Authorization": f"Basic {creds}",
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read())
+    cfg["access_token"] = result["access_token"]
+    cfg["token_expiry"] = _time.time() + result.get("expires_in", 7200)
+    _save_ebay_config(cfg)
+
+
+def _ebay_token():
+    cfg = _load_ebay_config()
+    if not cfg.get("access_token"):
+        return None
+    if _time.time() > cfg.get("token_expiry", 0) - 60:
+        try:
+            _ebay_refresh()
+            cfg = _load_ebay_config()
+        except Exception:
+            return None
+    return cfg["access_token"]
+
+
+def _ebay_api(method, path, body=None):
+    cfg = _load_ebay_config()
+    token = _ebay_token()
+    if not token:
+        raise Exception("Not connected to eBay. Go to eBay Settings first.")
+    url = f"{_ebay_base(cfg)}{path}"
+    payload = json.dumps(body).encode() if body else None
+    req = urllib.request.Request(url, data=payload, method=method, headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Content-Language": "de-DE",
+    })
+    try:
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        raise Exception(f"eBay API error ({e.code}): {err}")
+
+
+def _ebay_fetch_policies():
+    cfg = _load_ebay_config()
+    mp = cfg.get("marketplace", "EBAY_DE")
+    for kind in ("fulfillment", "payment", "return"):
+        try:
+            result = _ebay_api("GET", f"/sell/account/v1/{kind}_policy?marketplace_id={mp}")
+            policies = result.get(f"{kind}Policies", [])
+            if policies:
+                cfg[f"{kind}_policy_id"] = policies[0][f"{kind}PolicyId"]
+        except Exception:
+            pass
+    _save_ebay_config(cfg)
+
+
+def ebay_create_draft(card_id, price, quantity):
+    card = load_card(card_id)
+    if not card:
+        raise Exception(f"Card #{card_id} not found")
+
+    wb = load_workbook(EXCEL_PATH)
+    ws = wb["Inventar"]
+    condition_raw = "Near Mint"
+    grading_service = ""
+    grade = ""
+    for row in range(2, 202):
+        if ws.cell(row=row, column=1).value == card_id:
+            condition_raw = ws.cell(row=row, column=6).value or "Near Mint"
+            grading_service = ws.cell(row=row, column=8).value or ""
+            grade = ws.cell(row=row, column=9).value or ""
+            break
+    wb.close()
+
+    title_parts = [card["name"]]
+    if card["set"]:
+        title_parts.append(card["set"])
+    if card["number"]:
+        title_parts.append(card["number"])
+    if grading_service and grade:
+        title_parts.append(f"{grading_service} {grade}")
+    title_parts.append("Pokemon TCG")
+    title = " ".join(title_parts)[:80]
+
+    desc_lines = [f"<h2>{card['name']}</h2>",
+                  f"<p><b>Set:</b> {card['set']}</p>"]
+    if card["number"]:
+        desc_lines.append(f"<p><b>Card Number:</b> {card['number']}</p>")
+    desc_lines.append(f"<p><b>Language:</b> {card['language']}</p>")
+    desc_lines.append(f"<p><b>Condition:</b> {condition_raw}</p>")
+    if grading_service:
+        desc_lines.append(f"<p><b>Graded:</b> {grading_service} {grade}</p>")
+    description = "\n".join(desc_lines)
+
+    sku = f"PKM-{card_id:04d}"
+    cond_id = CONDITION_TO_EBAY.get(condition_raw, "3000")
+    if grading_service:
+        cond_id = "2750"
+
+    inv_item = {
+        "product": {
+            "title": title,
+            "description": description,
+            "aspects": {
+                "Card Name": [card["name"]],
+                "Set": [card["set"]],
+                "Game": ["Pokémon TCG"],
+                "Language": [card["language"]],
+            },
+        },
+        "condition": cond_id,
+        "conditionDescription": f"{grading_service} {grade}" if grading_service else condition_raw,
+        "availability": {
+            "shipToLocationAvailability": {"quantity": quantity}
+        },
+    }
+    _ebay_api("PUT", f"/sell/inventory/v1/inventory_item/{sku}", inv_item)
+
+    cfg = _load_ebay_config()
+    mp = cfg.get("marketplace", "EBAY_DE")
+    offer = {
+        "sku": sku,
+        "marketplaceId": mp,
+        "format": "FIXED_PRICE",
+        "listingDescription": description,
+        "availableQuantity": quantity,
+        "categoryId": "183454",
+        "pricingSummary": {
+            "price": {"currency": "EUR", "value": f"{price:.2f}"}
+        },
+        "listingPolicies": {},
+    }
+    for kind in ("fulfillment", "payment", "return"):
+        pid = cfg.get(f"{kind}_policy_id")
+        if pid:
+            offer["listingPolicies"][f"{kind}PolicyId"] = pid
+
+    result = _ebay_api("POST", "/sell/inventory/v1/offer", offer)
+    return result.get("offerId", "created")
+
+
+class _EbayCallbackHandler(BaseHTTPRequestHandler):
+    auth_code = None
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if "/ebay/callback" in self.path:
+            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+            params = parse_qs(qs)
+            code = params.get("code", [None])[0]
+            if code:
+                _EbayCallbackHandler.auth_code = code
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body style='text-align:center;padding:60px;font-family:system-ui'>"
+                    b"<h2 style='color:#4caf50'>Connected!</h2>"
+                    b"<p>You can close this tab and return to the app.</p></body></html>"
+                )
+                return
+        self.send_response(404)
+        self.end_headers()
+
+
 def get_photo_path(card_id):
     for ext in ("jpg", "jpeg", "png", "heic"):
         path = os.path.join(PHOTO_DIR, f"{card_id}.{ext}")
@@ -576,6 +821,9 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .photo-btn { background: #ffcb05; color: #1a1a2e; border: none; border-radius: 8px;
                padding: 10px 16px; font-weight: 600; font-size: 14px; cursor: pointer; }
   .photo-btn.done { background: #4caf50; color: white; }
+  .upload-form { display: none; }
+  .preview { max-width: 100%; max-height: 200px; border-radius: 8px; margin-top: 10px; }
+  .msg { text-align: center; padding: 20px; color: #4caf50; font-weight: 600; display: none; }
   input[type=file] { display: none; }
 </style>
 </head>
@@ -729,10 +977,12 @@ class App:
 
         add_frame = ttk.Frame(add_outer, padding=15)
         add_frame.grid(row=0, column=0)
+
         add_frame.columnconfigure(1, weight=1)
 
         ttk.Label(add_frame, text="Add Pokemon Card", font=("Helvetica", 16, "bold")).grid(
-            row=0, column=0, columnspan=3, pady=(0, 15))
+            row=0, column=0, columnspan=3, pady=(0, 15)
+        )
 
         ttk.Label(add_frame, text="Cardmarket Link:").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         self.url_entry = ttk.Entry(add_frame, width=45)
@@ -766,12 +1016,14 @@ class App:
         self.source_cb.set("Cardmarket")
         self.source_cb.grid(row=7, column=1, sticky="w", pady=4)
 
+        # --- Grading (optional) ---
         sep2 = ttk.Separator(add_frame, orient="horizontal")
         sep2.grid(row=8, column=0, columnspan=3, sticky="ew", pady=10)
 
         ttk.Label(add_frame, text="Grading:").grid(row=9, column=0, sticky="e", padx=(0, 10), pady=4)
         self.grading_cb = ttk.Combobox(
-            add_frame, values=["Not Graded", "Graded"], width=15, state="readonly")
+            add_frame, values=["Not Graded", "Graded"], width=15, state="readonly"
+        )
         self.grading_cb.set("Not Graded")
         self.grading_cb.grid(row=9, column=1, sticky="w", pady=4)
         self.grading_cb.bind("<<ComboboxSelected>>", self._toggle_grading_fields)
@@ -782,7 +1034,8 @@ class App:
         ttk.Label(self.grading_detail_frame, text="Service:").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
         self.grading_service_cb = ttk.Combobox(
             self.grading_detail_frame, values=["PSA", "CGC", "Beckett", "ACE", "TAG", "Other"],
-            width=10, state="readonly")
+            width=10, state="readonly"
+        )
         self.grading_service_cb.set("PSA")
         self.grading_service_cb.grid(row=0, column=1, sticky="w", pady=4)
 
@@ -797,7 +1050,8 @@ class App:
         self.grading_detail_frame.grid_remove()
 
         ttk.Button(add_frame, text="Save", command=self.on_save).grid(
-            row=11, column=0, columnspan=3, pady=(15, 5))
+            row=11, column=0, columnspan=3, pady=(15, 5)
+        )
 
         self.add_status = ttk.Label(add_frame, text="Paste a Cardmarket link and click Fetch", foreground="gray")
         self.add_status.grid(row=12, column=0, columnspan=3, pady=(5, 0))
@@ -810,6 +1064,7 @@ class App:
         col_frame = ttk.Frame(notebook, padding=15)
         notebook.add(col_frame, text="  My Collection  ")
 
+        # Search bar
         search_frame = ttk.Frame(col_frame)
         search_frame.pack(fill="x", pady=(0, 10))
         ttk.Label(search_frame, text="Search:").pack(side="left", padx=(0, 5))
@@ -834,6 +1089,7 @@ class App:
         url_label.pack(side="left", padx=(5, 0))
         url_label.bind("<Button-1>", lambda e: self.root.clipboard_clear() or self.root.clipboard_append(phone_url))
 
+        # Treeview
         tree_frame = ttk.Frame(col_frame)
         tree_frame.pack(side="left", fill="both", expand=True)
 
@@ -852,8 +1108,7 @@ class App:
         default_widths = {"id": 40, "photo": 35, "name": 160, "set": 150, "qty": 40,
                           "price": 80, "status": 100, "grading": 120}
         saved_widths = config.get("column_widths", {})
-        anchors = {"id": "center", "photo": "center", "qty": "center", "price": "e",
-                   "status": "center", "grading": "center"}
+        anchors = {"id": "center", "photo": "center", "qty": "center", "price": "e", "status": "center", "grading": "center"}
         for col, w in default_widths.items():
             self.tree.column(col, width=saved_widths.get(col, w), anchor=anchors.get(col, "w"))
 
@@ -871,17 +1126,19 @@ class App:
         ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
         ttk.Button(btn_frame, text="Edit Card", width=18, command=self.on_edit).pack(pady=5)
         ttk.Button(btn_frame, text="Mark Sold", width=18, command=self.on_mark_sold).pack(pady=5)
+        ttk.Button(btn_frame, text="List on eBay", width=18, command=self.on_ebay_list).pack(pady=5)
+        ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
         ttk.Button(btn_frame, text="Send to Grading", width=18, command=self.on_send_grading).pack(pady=5)
         ttk.Button(btn_frame, text="Grading Returned", width=18, command=self.on_grading_returned).pack(pady=5)
         ttk.Button(btn_frame, text="Delete Card", width=18, command=self.on_delete).pack(pady=20)
+        ttk.Button(btn_frame, text="eBay Settings", width=18, command=self.on_ebay_settings).pack(pady=5)
         ttk.Button(btn_frame, text="Refresh", width=18, command=self.refresh_collection).pack(pady=5)
 
         # --- Tab 3: Statistics ---
         stats_frame = ttk.Frame(notebook, padding=20)
         notebook.add(stats_frame, text="  Statistics  ")
 
-        ttk.Label(stats_frame, text="Portfolio Statistics", font=("Helvetica", 16, "bold"),
-                  foreground="white").pack(pady=(0, 20))
+        ttk.Label(stats_frame, text="Portfolio Statistics", font=("Helvetica", 16, "bold"), foreground="white").pack(pady=(0, 20))
 
         self.stats_container = ttk.Frame(stats_frame)
         self.stats_container.pack(fill="both", expand=True)
@@ -949,7 +1206,8 @@ class App:
                 continue
             ttk.Label(left, text=label, font=("Helvetica", 11), foreground="white").grid(row=i, column=0, sticky="w", pady=3)
             ttk.Label(left, text=value, font=("Helvetica", 11, "bold"), foreground="white").grid(
-                row=i, column=1, sticky="e", padx=(20, 0), pady=3)
+                row=i, column=1, sticky="e", padx=(20, 0), pady=3
+            )
 
         sales_rows = [
             ("Total Sales", str(s["sold"])),
@@ -972,7 +1230,8 @@ class App:
                 except ValueError:
                     pass
             ttk.Label(right, text=value, font=("Helvetica", 11, "bold"), foreground=fg).grid(
-                row=i, column=1, sticky="e", padx=(20, 0), pady=3)
+                row=i, column=1, sticky="e", padx=(20, 0), pady=3
+            )
 
     def _handle_enter(self):
         if self.url_entry.get().strip() and not self.fetched_data:
@@ -991,10 +1250,12 @@ class App:
         if not url:
             messagebox.showwarning("Missing Field", "Please paste a Cardmarket link.")
             return
+
         result = parse_cardmarket_url(url)
         if not result:
             messagebox.showwarning("Invalid Link", "Could not parse this URL.\nMake sure it's a Cardmarket link.")
             return
+
         self.fetched_data = result
         display = f"{result['name']}  —  {result['set']}"
         self.card_info_label.config(text=display)
@@ -1018,6 +1279,7 @@ class App:
         except ValueError:
             messagebox.showwarning("Invalid Input", "Purchase price must be a number.")
             return
+
         try:
             quantity = int(qty_str) if qty_str else 1
             if quantity < 1:
@@ -1132,6 +1394,7 @@ class App:
         card_id = self._get_selected_id()
         if card_id is None:
             return
+
         card = load_card(card_id)
         if card is None:
             messagebox.showerror("Error", f"Card #{card_id} not found.")
@@ -1144,6 +1407,7 @@ class App:
 
         frame = ttk.Frame(win, padding=15)
         frame.pack()
+
         fields = {}
 
         ttk.Label(frame, text="Card Name:").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
@@ -1200,19 +1464,29 @@ class App:
             except ValueError:
                 messagebox.showwarning("Invalid Input", "Quantity must be a positive whole number.")
                 return
-            edit_card(card_id, fields["name"].get().strip(), fields["set"].get(),
-                      fields["number"].get().strip(), fields["language"].get(),
-                      fields["condition"].get(), price, fields["source"].get(), qty)
+            edit_card(
+                card_id,
+                fields["name"].get().strip(),
+                fields["set"].get(),
+                fields["number"].get().strip(),
+                fields["language"].get(),
+                fields["condition"].get(),
+                price,
+                fields["source"].get(),
+                qty,
+            )
             win.destroy()
             self.refresh_collection()
 
         ttk.Button(frame, text="Save Changes", command=confirm).grid(
-            row=8, column=0, columnspan=2, pady=(15, 0))
+            row=8, column=0, columnspan=2, pady=(15, 0)
+        )
 
     def on_mark_sold(self):
         card_id = self._get_selected_id()
         if card_id is None:
             return
+
         card = load_card(card_id)
         if card is None:
             return
@@ -1230,8 +1504,7 @@ class App:
         qty_entry = ttk.Entry(frame, width=8)
         qty_entry.insert(0, str(total_qty))
         qty_entry.grid(row=0, column=1, sticky="w", pady=4)
-        ttk.Label(frame, text=f"  / {total_qty} available", foreground="gray").grid(
-            row=0, column=1, sticky="e", padx=(80, 0), pady=4)
+        ttk.Label(frame, text=f"  / {total_qty} available", foreground="gray").grid(row=0, column=1, sticky="e", padx=(80, 0), pady=4)
 
         ttk.Label(frame, text="Sale Price (EUR):").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
         sale_price_entry = ttk.Entry(frame, width=15)
@@ -1263,13 +1536,15 @@ class App:
             self.refresh_collection()
 
         ttk.Button(frame, text="Confirm Sale", command=confirm).grid(
-            row=4, column=0, columnspan=2, pady=(10, 0))
+            row=4, column=0, columnspan=2, pady=(10, 0)
+        )
         sale_price_entry.focus()
 
     def on_send_grading(self):
         card_id = self._get_selected_id()
         if card_id is None:
             return
+
         win = tk.Toplevel(self.root)
         win.title("Send to Grading")
         win.resizable(False, False)
@@ -1279,8 +1554,7 @@ class App:
         frame.pack()
 
         ttk.Label(frame, text="Grading Service:").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
-        service_cb = ttk.Combobox(frame, values=["PSA", "CGC", "Beckett", "ACE", "TAG", "Other"],
-                                  width=13, state="readonly")
+        service_cb = ttk.Combobox(frame, values=["PSA", "CGC", "Beckett", "ACE", "TAG", "Other"], width=13, state="readonly")
         service_cb.set("PSA")
         service_cb.grid(row=0, column=1, pady=4)
 
@@ -1290,12 +1564,14 @@ class App:
             self.refresh_collection()
 
         ttk.Button(frame, text="Confirm", command=confirm).grid(
-            row=1, column=0, columnspan=2, pady=(10, 0))
+            row=1, column=0, columnspan=2, pady=(10, 0)
+        )
 
     def on_grading_returned(self):
         card_id = self._get_selected_id()
         if card_id is None:
             return
+
         win = tk.Toplevel(self.root)
         win.title("Grading Returned")
         win.resizable(False, False)
@@ -1324,8 +1600,189 @@ class App:
             self.refresh_collection()
 
         ttk.Button(frame, text="Confirm", command=confirm).grid(
-            row=2, column=0, columnspan=2, pady=(10, 0))
+            row=2, column=0, columnspan=2, pady=(10, 0)
+        )
         grade_entry.focus()
+
+    def on_ebay_settings(self):
+        cfg = _load_ebay_config()
+        win = tk.Toplevel(self.root)
+        win.title("eBay Settings")
+        win.resizable(False, False)
+        win.grab_set()
+
+        frame = ttk.Frame(win, padding=15)
+        frame.pack()
+
+        ttk.Label(frame, text="eBay API Setup", font=("Helvetica", 14, "bold")).grid(
+            row=0, column=0, columnspan=2, pady=(0, 10))
+
+        ttk.Label(frame, text="1. Go to developer.ebay.com and create an app",
+                  foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(frame, text="2. Set Auth Redirect URL to: http://localhost:8089/ebay/callback",
+                  foreground="gray").grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(frame, text="3. Enter your credentials below:",
+                  foreground="gray").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 10))
+
+        ttk.Label(frame, text="Client ID:").grid(row=4, column=0, sticky="e", padx=(0, 10), pady=4)
+        client_id_entry = ttk.Entry(frame, width=40)
+        client_id_entry.insert(0, cfg.get("client_id", ""))
+        client_id_entry.grid(row=4, column=1, pady=4)
+
+        ttk.Label(frame, text="Client Secret:").grid(row=5, column=0, sticky="e", padx=(0, 10), pady=4)
+        client_secret_entry = ttk.Entry(frame, width=40, show="*")
+        client_secret_entry.insert(0, cfg.get("client_secret", ""))
+        client_secret_entry.grid(row=5, column=1, pady=4)
+
+        ttk.Label(frame, text="RuName:").grid(row=6, column=0, sticky="e", padx=(0, 10), pady=4)
+        ru_name_entry = ttk.Entry(frame, width=40)
+        ru_name_entry.insert(0, cfg.get("ru_name", ""))
+        ru_name_entry.grid(row=6, column=1, pady=4)
+
+        ttk.Label(frame, text="Marketplace:").grid(row=7, column=0, sticky="e", padx=(0, 10), pady=4)
+        mp_cb = ttk.Combobox(frame, values=["EBAY_DE", "EBAY_US", "EBAY_GB", "EBAY_FR", "EBAY_IT", "EBAY_ES"],
+                             width=12, state="readonly")
+        mp_cb.set(cfg.get("marketplace", "EBAY_DE"))
+        mp_cb.grid(row=7, column=1, sticky="w", pady=4)
+
+        status_label = ttk.Label(frame, text="")
+        status_label.grid(row=9, column=0, columnspan=2, pady=(5, 0))
+
+        if cfg.get("access_token"):
+            status_label.config(text="Status: Connected", foreground="green")
+        else:
+            status_label.config(text="Status: Not connected", foreground="red")
+
+        def save_and_connect():
+            cfg["client_id"] = client_id_entry.get().strip()
+            cfg["client_secret"] = client_secret_entry.get().strip()
+            cfg["ru_name"] = ru_name_entry.get().strip()
+            cfg["marketplace"] = mp_cb.get()
+            _save_ebay_config(cfg)
+
+            if not cfg["client_id"] or not cfg["client_secret"] or not cfg["ru_name"]:
+                messagebox.showwarning("Missing Fields", "Please fill in all three fields.")
+                return
+
+            server = HTTPServer(("127.0.0.1", EBAY_OAUTH_PORT), _EbayCallbackHandler)
+            _EbayCallbackHandler.auth_code = None
+            _serving = [True]
+
+            def serve():
+                server.timeout = 2
+                while _serving[0] and _EbayCallbackHandler.auth_code is None:
+                    server.handle_request()
+
+            threading.Thread(target=serve, daemon=True).start()
+
+            auth_url = (
+                f"{_ebay_auth_base(cfg)}/oauth2/authorize"
+                f"?client_id={urllib.parse.quote(cfg['client_id'])}"
+                f"&response_type=code"
+                f"&redirect_uri={urllib.parse.quote(cfg['ru_name'])}"
+                f"&scope={urllib.parse.quote(EBAY_SCOPES)}"
+            )
+            webbrowser.open(auth_url)
+            status_label.config(text="Waiting for authorization...", foreground="orange")
+
+            def check_auth():
+                if _EbayCallbackHandler.auth_code:
+                    _serving[0] = False
+                    try:
+                        server.server_close()
+                    except Exception:
+                        pass
+                    try:
+                        _ebay_exchange_code(_EbayCallbackHandler.auth_code)
+                        _ebay_fetch_policies()
+                        status_label.config(text="Status: Connected!", foreground="green")
+                        messagebox.showinfo("eBay", "Successfully connected to eBay!")
+                    except Exception as e:
+                        status_label.config(text="Connection failed", foreground="red")
+                        messagebox.showerror("eBay Error", str(e))
+                else:
+                    self.root.after(500, check_auth)
+
+            self.root.after(500, check_auth)
+
+        def save_only():
+            cfg["client_id"] = client_id_entry.get().strip()
+            cfg["client_secret"] = client_secret_entry.get().strip()
+            cfg["ru_name"] = ru_name_entry.get().strip()
+            cfg["marketplace"] = mp_cb.get()
+            _save_ebay_config(cfg)
+            messagebox.showinfo("Saved", "eBay settings saved.")
+
+        btn_row = ttk.Frame(frame)
+        btn_row.grid(row=8, column=0, columnspan=2, pady=(15, 5))
+        ttk.Button(btn_row, text="Save", command=save_only).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Save & Connect", command=save_and_connect).pack(side="left", padx=5)
+
+    def on_ebay_list(self):
+        card_id = self._get_selected_id()
+        if card_id is None:
+            return
+
+        cfg = _load_ebay_config()
+        if not cfg.get("access_token"):
+            messagebox.showwarning("eBay", "Not connected to eBay.\nGo to 'eBay Settings' first.")
+            return
+
+        card = load_card(card_id)
+        if card is None:
+            return
+        total_qty = int(card.get("quantity", 1))
+
+        win = tk.Toplevel(self.root)
+        win.title("List on eBay")
+        win.resizable(False, False)
+        win.grab_set()
+
+        frame = ttk.Frame(win, padding=15)
+        frame.pack()
+
+        ttk.Label(frame, text=f"{card['name']} — {card['set']}",
+                  font=("Helvetica", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 10))
+
+        ttk.Label(frame, text="Price (EUR):").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        price_entry = ttk.Entry(frame, width=15)
+        price_entry.insert(0, f"{card['price']:.2f}" if card["price"] else "")
+        price_entry.grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(frame, text="Quantity:").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
+        qty_entry = ttk.Entry(frame, width=8)
+        qty_entry.insert(0, str(total_qty))
+        qty_entry.grid(row=2, column=1, sticky="w", pady=4)
+
+        status_lbl = ttk.Label(frame, text="")
+        status_lbl.grid(row=4, column=0, columnspan=2, pady=(5, 0))
+
+        def create():
+            try:
+                price = float(price_entry.get().strip().replace(",", "."))
+                qty = int(qty_entry.get().strip())
+            except ValueError:
+                messagebox.showwarning("Invalid Input", "Price must be a number, quantity a whole number.")
+                return
+            if qty < 1 or qty > total_qty:
+                messagebox.showwarning("Invalid Quantity", f"Must be between 1 and {total_qty}.")
+                return
+
+            status_lbl.config(text="Creating listing...", foreground="orange")
+            win.update()
+
+            try:
+                offer_id = ebay_create_draft(card_id, price, qty)
+                win.destroy()
+                messagebox.showinfo("eBay", f"Draft listing created!\n\nOffer ID: {offer_id}\n\n"
+                                    "Go to eBay Seller Hub > Listings to review and publish.")
+            except Exception as e:
+                status_lbl.config(text="Failed", foreground="red")
+                messagebox.showerror("eBay Error", str(e))
+
+        ttk.Button(frame, text="Create Draft Listing", command=create).grid(
+            row=3, column=0, columnspan=2, pady=(10, 0))
+        price_entry.focus()
 
     def _on_tree_double_click(self, event):
         item = self.tree.identify_row(event.y)
@@ -1343,6 +1800,16 @@ class App:
             webbrowser.open(url)
         else:
             messagebox.showinfo("No Link", f"No Cardmarket link saved for card #{card_id}.")
+
+    def on_view_photo(self):
+        card_id = self._get_selected_id()
+        if card_id is None:
+            return
+        photo_path = get_photo_path(card_id)
+        if not photo_path:
+            messagebox.showinfo("No Photo", f"No photo for card #{card_id}.")
+            return
+        self._show_photo_popup(card_id, photo_path)
 
     def _show_photo_popup(self, card_id, photo_path):
         img = Image.open(photo_path)
@@ -1370,6 +1837,18 @@ class App:
             return
         if messagebox.askyesno("Delete Photo", f"Delete photo for card #{card_id}?"):
             os.remove(photo_path)
+            self.refresh_collection()
+
+    def on_add_photo(self):
+        card_id = self._get_selected_id()
+        if card_id is None:
+            return
+        path = filedialog.askopenfilename(
+            title=f"Select photo for card #{card_id}",
+            filetypes=[("Images", "*.jpg *.jpeg *.png *.heic *.heif")],
+        )
+        if path:
+            save_photo(card_id, path)
             self.refresh_collection()
 
     def on_delete(self):
