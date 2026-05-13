@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# User data (created at runtime)
+.app_config.json
+.card_urls.json
+Fotos/
+Karten/
+Pokemon-Inventar.xlsx
