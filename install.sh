@@ -4,7 +4,7 @@ set -e
 APP_DIR="$HOME/Pokemon-Sammlung"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Pokemon Card Manager – Setup ==="
+echo "=== Poke Inv – Setup ==="
 echo ""
 
 # Create base directories
@@ -37,14 +37,33 @@ else
 fi
 
 # Create macOS .app bundle
-APP_BUNDLE="$HOME/Desktop/Pokemon-Eintragen.app"
+APP_BUNDLE="$HOME/Desktop/Poke Inv.app"
 if [ ! -d "$APP_BUNDLE" ]; then
     mkdir -p "$APP_BUNDLE/Contents/MacOS"
-    cat > "$APP_BUNDLE/Contents/MacOS/run" << 'RUNEOF'
-#!/bin/bash
-"$HOME/Pokemon-Sammlung/.venv/bin/python3" "$HOME/Pokemon-Sammlung/pokemon_card_manager.py"
-RUNEOF
-    chmod +x "$APP_BUNDLE/Contents/MacOS/run"
+    mkdir -p "$APP_BUNDLE/Contents/Resources"
+
+    # Generate app icon (yellow P on dark background)
+    "$APP_DIR/.venv/bin/python3" "$SCRIPT_DIR/create_icon.py" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
+    # Compile native launcher for fast startup
+    cat > /tmp/_poke_launcher.c << 'CEOF'
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+    const char *home = getenv("HOME");
+    if (!home) { fprintf(stderr, "HOME not set\n"); return 1; }
+    char python[512], script[512];
+    snprintf(python, sizeof(python), "%s/Pokemon-Sammlung/.venv/bin/python3", home);
+    snprintf(script, sizeof(script), "%s/Pokemon-Sammlung/pokemon_card_manager.py", home);
+    execl(python, "python3", script, NULL);
+    perror("execl failed");
+    return 1;
+}
+CEOF
+    cc -o "$APP_BUNDLE/Contents/MacOS/PokeInv" /tmp/_poke_launcher.c -O2
+    rm /tmp/_poke_launcher.c
 
     cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -52,26 +71,30 @@ RUNEOF
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>run</string>
+    <string>PokeInv</string>
     <key>CFBundleName</key>
-    <string>Pokemon Eintragen</string>
+    <string>Poke Inv</string>
     <key>CFBundleIdentifier</key>
-    <string>com.pokemon.card-manager</string>
+    <string>com.pokemon.poke-inv</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSUIElement</key>
-    <true/>
+    <false/>
 </dict>
 </plist>
 PLISTEOF
-    echo "✓ Created desktop app: Pokemon-Eintragen.app"
+
+    codesign --force --sign - "$APP_BUNDLE" 2>/dev/null || true
+    echo "✓ Created desktop app: Poke Inv.app"
 else
     echo "✓ Desktop app already exists"
 fi
 
 echo ""
 echo "=== Setup complete! ==="
-echo "Double-click 'Pokemon-Eintragen' on your Desktop to launch."
+echo "Double-click 'Poke Inv' on your Desktop to launch."
 echo "Data is stored in: $APP_DIR"

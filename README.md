@@ -1,4 +1,4 @@
-# Pokemon Card Manager
+# Poke Inv
 
 A macOS desktop app for managing your Pokemon card collection. Track inventory, grading, sales, and photos — all stored locally in an Excel workbook.
 
@@ -8,6 +8,7 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 - **Collection view** with filtering (All / Collection / For Sale / Sold / Grading)
 - **Grading tracker** — submit cards for grading and record results
 - **Partial selling** — sell part of your stock, track sales with profit calculation
+- **eBay integration** — create draft listings directly from your inventory
 - **Photo upload** from your phone via local WiFi (built-in web server)
 - **Cardmarket links** — double-click a card to open its Cardmarket page
 - **Statistics** tab with investment totals, grading overview, and sales summary
@@ -17,12 +18,12 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 
 - macOS
 - Python 3.10+ (pre-installed on modern macOS, or install via [python.org](https://www.python.org/downloads/))
-- Tkinter (included with Python on macOS)
+- Xcode Command Line Tools (`xcode-select --install`) for the native launcher
 
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/PokemonCardManager.git
+git clone https://github.com/Werizu/PokemonCardManager.git
 cd PokemonCardManager
 chmod +x install.sh
 ./install.sh
@@ -32,11 +33,11 @@ This will:
 1. Create `~/Pokemon-Sammlung/` with your data folders
 2. Set up a Python virtual environment and install dependencies
 3. Create an empty Excel workbook with the correct structure
-4. Place a **Pokemon-Eintragen** app on your Desktop
+4. Place a **Poke Inv** app on your Desktop (with icon)
 
 ## Usage
 
-Double-click **Pokemon-Eintragen** on your Desktop, or run:
+Double-click **Poke Inv** on your Desktop, or run:
 
 ```bash
 ~/Pokemon-Sammlung/.venv/bin/python3 ~/Pokemon-Sammlung/pokemon_card_manager.py
@@ -59,9 +60,15 @@ When the app is running, it starts a local web server for phone uploads:
 ### Selling Cards
 
 1. Select a card in the **Collection** tab
-2. Click **Sell Card**
+2. Click **Mark Sold**
 3. Enter sale price, platform, fees, and quantity to sell
 4. The inventory quantity decreases; a sales record is created
+
+### eBay Listings
+
+1. Go to **eBay Settings** and connect your eBay developer account (one-time setup)
+2. Select a card and click **List on eBay**
+3. Confirm the price — a draft listing is created in your eBay Seller Hub
 
 ## Data Storage
 
