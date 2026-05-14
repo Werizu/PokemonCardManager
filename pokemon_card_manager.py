@@ -939,8 +939,19 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
+class _ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind(self.server_address)
+        self.server_address = self.socket.getsockname()
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
+
 def start_photo_server():
-    server = HTTPServer(("0.0.0.0", UPLOAD_PORT), PhotoUploadHandler)
+    server = _ReusableHTTPServer(("0.0.0.0", UPLOAD_PORT), PhotoUploadHandler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1861,11 +1872,23 @@ class App:
         self.refresh_collection()
 
 
-if __name__ == "__main__":
-    photo_server = start_photo_server()
-    local_ip = _get_local_ip()
-    print(f"Photo upload server running at http://{local_ip}:{UPLOAD_PORT}")
+def _activate_window():
+    import subprocess
+    subprocess.Popen([
+        "osascript", "-e",
+        'tell application "System Events" to set frontmost of first process '
+        'whose unix id is ' + str(os.getpid()) + ' to true'
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+
+if __name__ == "__main__":
     root = tk.Tk()
+    root.withdraw()
+    root.update_idletasks()
+
+    photo_server = start_photo_server()
+
+    root.deiconify()
     app = App(root)
+    root.after(300, _activate_window)
     root.mainloop()
