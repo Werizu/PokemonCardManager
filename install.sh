@@ -45,8 +45,9 @@ if [ ! -d "$APP_BUNDLE" ]; then
     # Generate app icon (yellow P on dark background)
     "$APP_DIR/.venv/bin/python3" "$SCRIPT_DIR/create_icon.py" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
-    # Compile native launcher for fast startup
-    cat > /tmp/_poke_launcher.c << 'CEOF'
+    # Try native launcher (fast), fall back to bash script
+    if command -v cc &> /dev/null; then
+        cat > /tmp/_poke_launcher.c << 'CEOF'
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,8 +63,15 @@ int main(int argc, char *argv[]) {
     return 1;
 }
 CEOF
-    cc -o "$APP_BUNDLE/Contents/MacOS/PokeInv" /tmp/_poke_launcher.c -O2
-    rm /tmp/_poke_launcher.c
+        cc -o "$APP_BUNDLE/Contents/MacOS/PokeInv" /tmp/_poke_launcher.c -O2
+        rm /tmp/_poke_launcher.c
+    else
+        cat > "$APP_BUNDLE/Contents/MacOS/PokeInv" << 'BASHEOF'
+#!/bin/bash
+exec "$HOME/Pokemon-Sammlung/.venv/bin/python3" "$HOME/Pokemon-Sammlung/pokemon_card_manager.py"
+BASHEOF
+        chmod +x "$APP_BUNDLE/Contents/MacOS/PokeInv"
+    fi
 
     cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
