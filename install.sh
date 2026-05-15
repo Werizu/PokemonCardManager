@@ -32,7 +32,7 @@ done
 
 if [ -z "$PYTHON" ]; then
     echo "Installing Python 3 via Homebrew..."
-    brew install python-tk python3
+    brew install python3 python-tk
     PYTHON="$(command -v python3)"
     if [ -z "$PYTHON" ]; then
         echo "ERROR: Python installation failed."
@@ -42,6 +42,14 @@ if [ -z "$PYTHON" ]; then
 else
     PY_VERSION=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     echo "✓ Python $PY_VERSION found ($PYTHON)"
+fi
+
+# ── 2b. Check for working Tk (not deprecated system Tk) ──
+if "$PYTHON" -c "import tkinter; r=tkinter.Tk(); r.withdraw(); r.destroy()" 2>&1 | grep -q "DEPRECATION"; then
+    echo "System Tk is deprecated, installing Homebrew python-tk..."
+    PY_VERSION=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    brew install "python-tk@$PY_VERSION" 2>/dev/null || brew install python-tk 2>/dev/null
+    echo "✓ Installed python-tk"
 fi
 
 # ── 3. Xcode Command Line Tools (for C compiler) ──
