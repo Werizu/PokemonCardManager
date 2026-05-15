@@ -1149,7 +1149,7 @@ class App:
         stats_frame = ttk.Frame(notebook, padding=20)
         notebook.add(stats_frame, text="  Statistics  ")
 
-        ttk.Label(stats_frame, text="Portfolio Statistics", font=("Helvetica", 16, "bold"), foreground="white").pack(pady=(0, 20))
+        ttk.Label(stats_frame, text="Portfolio Statistics", font=("Helvetica", 16, "bold")).pack(pady=(0, 20))
 
         self.stats_container = ttk.Frame(stats_frame)
         self.stats_container.pack(fill="both", expand=True)
@@ -1215,8 +1215,8 @@ class App:
             if not label:
                 ttk.Separator(left, orient="horizontal").grid(row=i, column=0, columnspan=2, sticky="ew", pady=8)
                 continue
-            ttk.Label(left, text=label, font=("Helvetica", 11), foreground="white").grid(row=i, column=0, sticky="w", pady=3)
-            ttk.Label(left, text=value, font=("Helvetica", 11, "bold"), foreground="white").grid(
+            ttk.Label(left, text=label, font=("Helvetica", 11)).grid(row=i, column=0, sticky="w", pady=3)
+            ttk.Label(left, text=value, font=("Helvetica", 11, "bold")).grid(
                 row=i, column=1, sticky="e", padx=(20, 0), pady=3
             )
 
@@ -1232,15 +1232,15 @@ class App:
             if not label:
                 ttk.Separator(right, orient="horizontal").grid(row=i, column=0, columnspan=2, sticky="ew", pady=8)
                 continue
-            ttk.Label(right, text=label, font=("Helvetica", 11), foreground="white").grid(row=i, column=0, sticky="w", pady=3)
-            fg = "white"
+            ttk.Label(right, text=label, font=("Helvetica", 11)).grid(row=i, column=0, sticky="w", pady=3)
+            kwargs = {}
             if "Profit" in label:
                 val_str = value.replace(" EUR", "")
                 try:
-                    fg = "#4caf50" if float(val_str) >= 0 else "#f44336"
+                    kwargs["foreground"] = "#4caf50" if float(val_str) >= 0 else "#f44336"
                 except ValueError:
                     pass
-            ttk.Label(right, text=value, font=("Helvetica", 11, "bold"), foreground=fg).grid(
+            ttk.Label(right, text=value, font=("Helvetica", 11, "bold"), **kwargs).grid(
                 row=i, column=1, sticky="e", padx=(20, 0), pady=3
             )
 
@@ -1882,13 +1882,9 @@ def _activate_window():
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.withdraw()
-    root.update_idletasks()
-
     photo_server = start_photo_server()
 
-    root.deiconify()
+    root = tk.Tk()
     app = App(root)
     root.after(300, _activate_window)
     root.mainloop()
