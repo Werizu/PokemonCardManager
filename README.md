@@ -66,9 +66,25 @@ When the app is running, it starts a local web server for phone uploads:
 
 ### eBay Listings
 
-1. Go to **eBay Settings** and connect your eBay developer account (one-time setup)
-2. Select a card and click **List on eBay**
-3. Confirm the price — a draft listing is created in your eBay Seller Hub
+#### One-time setup
+
+1. Go to [developer.ebay.com](https://developer.ebay.com) and sign in with your eBay account
+2. Click **Create Application** and select **Production**
+3. Under **User Tokens** → **Get a Token from eBay via Your Application**:
+   - Set **Auth Accepted URL** to `http://localhost:8089/ebay/callback`
+   - Set **Auth Declined URL** to `http://localhost:8089/ebay/declined`
+4. Note down your **App ID** (Client ID), **Cert ID** (Client Secret), and **RuName** (listed under the redirect URLs)
+5. In Poke Inv, click **eBay Settings** (right side of the Collection tab)
+6. Enter Client ID, Client Secret, and RuName
+7. Set Marketplace to your region (e.g. `EBAY_DE` for Germany)
+8. Click **Save & Connect** — eBay opens in your browser, authorize the app
+
+#### Creating listings
+
+1. Select a card in the **Collection** tab
+2. Click **List on eBay**
+3. Confirm the price and quantity
+4. A draft listing is created — review and publish it in your [eBay Seller Hub](https://www.ebay.com/sh/overview)
 
 ## Data Storage
 
