@@ -1313,9 +1313,21 @@ class App:
         url_label.pack(side="left", padx=(5, 0))
         url_label.bind("<Button-1>", lambda e: self.root.clipboard_clear() or self.root.clipboard_append(phone_url))
 
+        # Buttons (responsive flow layout at bottom)
+        btn_frame = ttk.Frame(col_frame)
+        btn_frame.pack(side="bottom", fill="x", pady=(8, 0))
+        self._col_buttons = []
+        for text, cmd in [("Delete Photo", self.on_delete_photo), ("Edit Card", self.on_edit),
+                          ("Mark Sold", self.on_mark_sold), ("List on eBay", self.on_ebay_list),
+                          ("Send to Grading", self.on_send_grading), ("Grading Returned", self.on_grading_returned),
+                          ("Delete Card", self.on_delete), ("Refresh", self.refresh_collection)]:
+            self._col_buttons.append(ttk.Button(btn_frame, text=text, command=cmd))
+        self._btn_frame = btn_frame
+        btn_frame.bind("<Configure>", self._reflow_col_buttons)
+
         # Treeview
         tree_frame = ttk.Frame(col_frame)
-        tree_frame.pack(side="left", fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True)
 
         columns = ("id", "photo", "name", "set", "qty", "price", "status", "grading")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=18)
@@ -1343,20 +1355,6 @@ class App:
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         scrollbar.pack(side="left", fill="y")
 
-        btn_frame = ttk.Frame(col_frame)
-        btn_frame.pack(side="right", fill="y", padx=(10, 0))
-
-        ttk.Button(btn_frame, text="Delete Photo", width=18, command=self.on_delete_photo).pack(pady=5)
-        ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Button(btn_frame, text="Edit Card", width=18, command=self.on_edit).pack(pady=5)
-        ttk.Button(btn_frame, text="Mark Sold", width=18, command=self.on_mark_sold).pack(pady=5)
-        ttk.Button(btn_frame, text="List on eBay", width=18, command=self.on_ebay_list).pack(pady=5)
-        ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Button(btn_frame, text="Send to Grading", width=18, command=self.on_send_grading).pack(pady=5)
-        ttk.Button(btn_frame, text="Grading Returned", width=18, command=self.on_grading_returned).pack(pady=5)
-        ttk.Button(btn_frame, text="Delete Card", width=18, command=self.on_delete).pack(pady=20)
-        ttk.Button(btn_frame, text="Refresh", width=18, command=self.refresh_collection).pack(pady=5)
-
         # --- Tab 3: Statistics ---
         stats_frame = ttk.Frame(notebook, padding=20)
         notebook.add(stats_frame, text="  Statistics  ")
@@ -1374,14 +1372,15 @@ class App:
         settings_scroll = ttk.Scrollbar(settings_frame, orient="vertical", command=settings_canvas.yview)
         settings_inner = ttk.Frame(settings_canvas)
         settings_inner.bind("<Configure>", lambda e: settings_canvas.configure(scrollregion=settings_canvas.bbox("all")))
-        settings_canvas.create_window((0, 0), window=settings_inner, anchor="nw")
+        settings_win_id = settings_canvas.create_window((0, 0), window=settings_inner, anchor="nw")
         settings_canvas.configure(yscrollcommand=settings_scroll.set)
         settings_canvas.pack(side="left", fill="both", expand=True)
         settings_scroll.pack(side="right", fill="y")
+        settings_inner.columnconfigure(0, weight=1)
 
         # -- eBay Connection --
         ebay_frame = ttk.LabelFrame(settings_inner, text="eBay Connection", padding=15)
-        ebay_frame.pack(fill="x", pady=(0, 15), padx=5)
+        ebay_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(0, 10))
 
         cfg = _load_ebay_config()
 
@@ -1420,7 +1419,7 @@ class App:
 
         # -- Shipping --
         ship_frame = ttk.LabelFrame(settings_inner, text="Shipping / Versand", padding=15)
-        ship_frame.pack(fill="x", pady=(0, 15), padx=5)
+        ship_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
 
         ttk.Label(ship_frame, text="Deutschland (EUR):").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
         self.cfg_ship_de = ttk.Entry(ship_frame, width=10)
@@ -1450,13 +1449,43 @@ class App:
 
         # -- App --
         app_frame = ttk.LabelFrame(settings_inner, text="App", padding=15)
-        app_frame.pack(fill="x", pady=(0, 15), padx=5)
+        app_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
 
         ttk.Label(app_frame, text=f"Version: v{VERSION}").pack(anchor="w")
         ttk.Button(app_frame, text="Check for Updates", command=self.on_check_update).pack(anchor="w", pady=(10, 0))
 
+        def reflow_settings(event=None):
+            w = settings_canvas.winfo_width()
+            if w <= 1:
+                return
+            settings_canvas.itemconfigure(settings_win_id, width=w)
+            for f in (ebay_frame, ship_frame, app_frame):
+                f.grid_forget()
+            if w >= 700:
+                ebay_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=5, pady=(0, 10))
+                ship_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=(0, 10))
+                app_frame.grid(row=1, column=1, sticky="nsew", padx=5, pady=(0, 10))
+                settings_inner.columnconfigure(1, weight=1)
+            else:
+                ebay_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(0, 10))
+                ship_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
+                app_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
+                settings_inner.columnconfigure(1, weight=0)
+        settings_canvas.bind("<Configure>", reflow_settings)
+
         notebook.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_change(notebook))
         self.refresh_collection()
+
+    def _reflow_col_buttons(self, event=None):
+        avail = self._btn_frame.winfo_width()
+        if avail <= 1:
+            return
+        cols = max(1, avail // 150)
+        for i, btn in enumerate(self._col_buttons):
+            r, c = divmod(i, cols)
+            btn.grid(row=r, column=c, padx=3, pady=3, sticky="ew")
+        for c in range(cols):
+            self._btn_frame.columnconfigure(c, weight=1)
 
     def _save_state(self):
         config = _load_config()
