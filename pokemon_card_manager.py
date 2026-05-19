@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.2.1"
+VERSION = "1.3.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -1475,6 +1475,7 @@ class App:
 
         notebook.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_change(notebook))
         self.refresh_collection()
+        self.root.after(500, self._auto_check_update)
 
     def _reflow_col_buttons(self, event=None):
         avail = self._btn_frame.winfo_width()
@@ -2191,6 +2192,34 @@ class App:
             return
         delete_card(card_id)
         self.refresh_collection()
+
+    def _auto_check_update(self):
+        def _check():
+            try:
+                has_update, remote_version, content = check_for_update()
+            except Exception:
+                return
+            if not has_update:
+                return
+            self.root.after(0, lambda: self._offer_update(remote_version, content))
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _offer_update(self, remote_version, content):
+        if not messagebox.askyesno(
+            "Update Available",
+            f"New version v{remote_version} available.\n"
+            f"Current version: v{VERSION}\n\n"
+            "Download and install?\n"
+            "(Your data will not be affected.)",
+        ):
+            return
+        try:
+            apply_update(content)
+            messagebox.showinfo("Updated", f"Updated to v{remote_version}.\nThe app will restart now.")
+            self._save_state()
+            restart_app()
+        except Exception as e:
+            messagebox.showerror("Update Error", f"Could not install update:\n{e}")
 
     def on_check_update(self):
         try:
