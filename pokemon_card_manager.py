@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -631,7 +631,7 @@ def _ebay_api(method, path, body=None):
     cfg = _load_ebay_config()
     token = _ebay_token()
     if not token:
-        raise Exception("Not connected to eBay. Go to eBay Settings first.")
+        raise Exception("Not connected to eBay. Go to the Settings tab first.")
     url = f"{_ebay_base(cfg)}{path}"
     payload = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, data=payload, method=method, headers={
@@ -708,6 +708,60 @@ def _ebay_fetch_policies():
                 cfg[f"{kind}_policy_id"] = policies[0][f"{kind}PolicyId"]
         except Exception:
             pass
+    _save_ebay_config(cfg)
+
+
+def _ebay_update_shipping(de_cost, eu_cost, intl_cost, handling_days=2):
+    cfg = _load_ebay_config()
+    policy_id = cfg.get("fulfillment_policy_id")
+    if not policy_id:
+        raise Exception("No fulfillment policy found. Connect to eBay first.")
+    _ebay_api("PUT", f"/sell/account/v1/fulfillment_policy/{policy_id}", {
+        "name": "Standard Versand",
+        "marketplaceId": cfg.get("marketplace", "EBAY_DE"),
+        "handlingTime": {"value": handling_days, "unit": "DAY"},
+        "globalShipping": False,
+        "shippingOptions": [
+            {
+                "optionType": "DOMESTIC",
+                "costType": "FLAT_RATE",
+                "shippingServices": [{
+                    "sortOrder": 1,
+                    "shippingCarrierCode": "DHL",
+                    "shippingServiceCode": "DE_DHLPaket",
+                    "shippingCost": {"value": f"{de_cost:.2f}", "currency": "EUR"},
+                    "freeShipping": False,
+                }],
+            },
+            {
+                "optionType": "INTERNATIONAL",
+                "costType": "FLAT_RATE",
+                "shipToLocations": {"regionIncluded": [{"regionName": "WORLDWIDE"}]},
+                "shippingServices": [
+                    {
+                        "sortOrder": 1,
+                        "shippingCarrierCode": "DHL",
+                        "shippingServiceCode": "DE_DHLPaketInternational",
+                        "shippingCost": {"value": f"{eu_cost:.2f}", "currency": "EUR"},
+                        "freeShipping": False,
+                        "shipToLocations": {"regionIncluded": [{"regionName": "EUROPE"}]},
+                    },
+                    {
+                        "sortOrder": 2,
+                        "shippingCarrierCode": "DHL",
+                        "shippingServiceCode": "DE_DHLPaketInternational",
+                        "shippingCost": {"value": f"{intl_cost:.2f}", "currency": "EUR"},
+                        "freeShipping": False,
+                        "shipToLocations": {"regionIncluded": [{"regionName": "WORLDWIDE"}]},
+                    },
+                ],
+            },
+        ],
+    })
+    cfg["shipping_de"] = de_cost
+    cfg["shipping_eu"] = eu_cost
+    cfg["shipping_intl"] = intl_cost
+    cfg["handling_days"] = handling_days
     _save_ebay_config(cfg)
 
 
@@ -1301,10 +1355,7 @@ class App:
         ttk.Button(btn_frame, text="Send to Grading", width=18, command=self.on_send_grading).pack(pady=5)
         ttk.Button(btn_frame, text="Grading Returned", width=18, command=self.on_grading_returned).pack(pady=5)
         ttk.Button(btn_frame, text="Delete Card", width=18, command=self.on_delete).pack(pady=20)
-        ttk.Button(btn_frame, text="eBay Settings", width=18, command=self.on_ebay_settings).pack(pady=5)
         ttk.Button(btn_frame, text="Refresh", width=18, command=self.refresh_collection).pack(pady=5)
-        ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Button(btn_frame, text="Check for Updates", width=18, command=self.on_check_update).pack(pady=5)
 
         # --- Tab 3: Statistics ---
         stats_frame = ttk.Frame(notebook, padding=20)
@@ -1314,6 +1365,95 @@ class App:
 
         self.stats_container = ttk.Frame(stats_frame)
         self.stats_container.pack(fill="both", expand=True)
+
+        # --- Tab 4: Settings ---
+        settings_frame = ttk.Frame(notebook, padding=20)
+        notebook.add(settings_frame, text="  Settings  ")
+
+        settings_canvas = tk.Canvas(settings_frame, highlightthickness=0)
+        settings_scroll = ttk.Scrollbar(settings_frame, orient="vertical", command=settings_canvas.yview)
+        settings_inner = ttk.Frame(settings_canvas)
+        settings_inner.bind("<Configure>", lambda e: settings_canvas.configure(scrollregion=settings_canvas.bbox("all")))
+        settings_canvas.create_window((0, 0), window=settings_inner, anchor="nw")
+        settings_canvas.configure(yscrollcommand=settings_scroll.set)
+        settings_canvas.pack(side="left", fill="both", expand=True)
+        settings_scroll.pack(side="right", fill="y")
+
+        # -- eBay Connection --
+        ebay_frame = ttk.LabelFrame(settings_inner, text="eBay Connection", padding=15)
+        ebay_frame.pack(fill="x", pady=(0, 15), padx=5)
+
+        cfg = _load_ebay_config()
+
+        ttk.Label(ebay_frame, text="Client ID:").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_client_id = ttk.Entry(ebay_frame, width=45)
+        self.cfg_client_id.insert(0, cfg.get("client_id", ""))
+        self.cfg_client_id.grid(row=0, column=1, pady=4, sticky="w")
+
+        ttk.Label(ebay_frame, text="Client Secret:").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_client_secret = ttk.Entry(ebay_frame, width=45, show="*")
+        self.cfg_client_secret.insert(0, cfg.get("client_secret", ""))
+        self.cfg_client_secret.grid(row=1, column=1, pady=4, sticky="w")
+
+        ttk.Label(ebay_frame, text="RuName:").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_ru_name = ttk.Entry(ebay_frame, width=45)
+        self.cfg_ru_name.insert(0, cfg.get("ru_name", ""))
+        self.cfg_ru_name.grid(row=2, column=1, pady=4, sticky="w")
+
+        ttk.Label(ebay_frame, text="Marketplace:").grid(row=3, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_marketplace = ttk.Combobox(ebay_frame, values=["EBAY_DE", "EBAY_US", "EBAY_GB", "EBAY_FR", "EBAY_IT", "EBAY_ES"],
+                                            width=12, state="readonly")
+        self.cfg_marketplace.set(cfg.get("marketplace", "EBAY_DE"))
+        self.cfg_marketplace.grid(row=3, column=1, sticky="w", pady=4)
+
+        self.ebay_status_label = ttk.Label(ebay_frame, text="")
+        self.ebay_status_label.grid(row=5, column=0, columnspan=2, pady=(5, 0))
+        if cfg.get("access_token"):
+            self.ebay_status_label.config(text="Status: Connected", foreground="green")
+        else:
+            self.ebay_status_label.config(text="Status: Not connected", foreground="red")
+
+        ebay_btn_row = ttk.Frame(ebay_frame)
+        ebay_btn_row.grid(row=4, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(ebay_btn_row, text="Save", command=self._settings_ebay_save).pack(side="left", padx=5)
+        ttk.Button(ebay_btn_row, text="Save & Connect", command=self._settings_ebay_connect).pack(side="left", padx=5)
+
+        # -- Shipping --
+        ship_frame = ttk.LabelFrame(settings_inner, text="Shipping / Versand", padding=15)
+        ship_frame.pack(fill="x", pady=(0, 15), padx=5)
+
+        ttk.Label(ship_frame, text="Deutschland (EUR):").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_ship_de = ttk.Entry(ship_frame, width=10)
+        self.cfg_ship_de.insert(0, f"{cfg.get('shipping_de', 6.19):.2f}")
+        self.cfg_ship_de.grid(row=0, column=1, sticky="w", pady=4)
+
+        ttk.Label(ship_frame, text="EU (EUR):").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_ship_eu = ttk.Entry(ship_frame, width=10)
+        self.cfg_ship_eu.insert(0, f"{cfg.get('shipping_eu', 14.49):.2f}")
+        self.cfg_ship_eu.grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(ship_frame, text="International (EUR):").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_ship_intl = ttk.Entry(ship_frame, width=10)
+        self.cfg_ship_intl.insert(0, f"{cfg.get('shipping_intl', 26.49):.2f}")
+        self.cfg_ship_intl.grid(row=2, column=1, sticky="w", pady=4)
+
+        ttk.Label(ship_frame, text="Handling Time (Days):").grid(row=3, column=0, sticky="e", padx=(0, 10), pady=4)
+        self.cfg_handling = ttk.Combobox(ship_frame, values=["1", "2", "3", "4", "5"], width=5, state="readonly")
+        self.cfg_handling.set(str(cfg.get("handling_days", 2)))
+        self.cfg_handling.grid(row=3, column=1, sticky="w", pady=4)
+
+        self.ship_status = ttk.Label(ship_frame, text="")
+        self.ship_status.grid(row=5, column=0, columnspan=2, pady=(5, 0))
+
+        ttk.Button(ship_frame, text="Save Shipping", command=self._settings_save_shipping).grid(
+            row=4, column=0, columnspan=2, pady=(10, 0))
+
+        # -- App --
+        app_frame = ttk.LabelFrame(settings_inner, text="App", padding=15)
+        app_frame.pack(fill="x", pady=(0, 15), padx=5)
+
+        ttk.Label(app_frame, text=f"Version: v{VERSION}").pack(anchor="w")
+        ttk.Button(app_frame, text="Check for Updates", command=self.on_check_update).pack(anchor="w", pady=(10, 0))
 
         notebook.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_change(notebook))
         self.refresh_collection()
@@ -1776,110 +1916,84 @@ class App:
         )
         grade_entry.focus()
 
-    def on_ebay_settings(self):
+    def _settings_ebay_save(self):
         cfg = _load_ebay_config()
-        win = tk.Toplevel(self.root)
-        win.title("eBay Settings")
-        win.resizable(False, False)
-        win.grab_set()
+        cfg["client_id"] = self.cfg_client_id.get().strip()
+        cfg["client_secret"] = self.cfg_client_secret.get().strip()
+        cfg["ru_name"] = self.cfg_ru_name.get().strip()
+        cfg["marketplace"] = self.cfg_marketplace.get()
+        _save_ebay_config(cfg)
+        self.ebay_status_label.config(text="Settings saved.", foreground="blue")
 
-        frame = ttk.Frame(win, padding=15)
-        frame.pack()
+    def _settings_ebay_connect(self):
+        self._settings_ebay_save()
+        cfg = _load_ebay_config()
 
-        ttk.Label(frame, text="eBay API Setup", font=("Helvetica", 14, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=(0, 10))
+        if not cfg.get("client_id") or not cfg.get("client_secret") or not cfg.get("ru_name"):
+            messagebox.showwarning("Missing Fields", "Please fill in Client ID, Client Secret, and RuName.")
+            return
 
-        ttk.Label(frame, text="1. Go to developer.ebay.com and create an app",
-                  foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(frame, text="2. Set Auth Redirect URL to any HTTPS domain you own",
-                  foreground="gray").grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(frame, text="3. Enter your credentials below and click 'Connect'",
-                  foreground="gray").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 10))
+        auth_url = (
+            f"{_ebay_auth_base(cfg)}/oauth2/authorize"
+            f"?client_id={urllib.parse.quote(cfg['client_id'])}"
+            f"&response_type=code"
+            f"&redirect_uri={urllib.parse.quote(cfg['ru_name'])}"
+            f"&scope={urllib.parse.quote(EBAY_SCOPES)}"
+        )
+        webbrowser.open(auth_url)
+        self.ebay_status_label.config(text="Waiting for authorization...", foreground="orange")
 
-        ttk.Label(frame, text="Client ID:").grid(row=4, column=0, sticky="e", padx=(0, 10), pady=4)
-        client_id_entry = ttk.Entry(frame, width=40)
-        client_id_entry.insert(0, cfg.get("client_id", ""))
-        client_id_entry.grid(row=4, column=1, pady=4)
+        paste_url = simpledialog.askstring(
+            "eBay Authorization",
+            "1. Log in to eBay in the browser window that just opened.\n"
+            "2. After granting access, you will be redirected.\n"
+            "3. Copy the FULL URL from your browser's address bar\n"
+            "   and paste it here:\n",
+            parent=self.root,
+        )
+        if not paste_url:
+            self.ebay_status_label.config(text="Status: Not connected", foreground="red")
+            return
 
-        ttk.Label(frame, text="Client Secret:").grid(row=5, column=0, sticky="e", padx=(0, 10), pady=4)
-        client_secret_entry = ttk.Entry(frame, width=40, show="*")
-        client_secret_entry.insert(0, cfg.get("client_secret", ""))
-        client_secret_entry.grid(row=5, column=1, pady=4)
+        try:
+            auth_code = _extract_auth_code(paste_url)
+            _ebay_exchange_code(auth_code)
+            _ebay_fetch_policies()
+            self.ebay_status_label.config(text="Status: Connected!", foreground="green")
+            messagebox.showinfo("eBay", "Successfully connected to eBay!")
+        except Exception as e:
+            self.ebay_status_label.config(text="Connection failed", foreground="red")
+            messagebox.showerror("eBay Error", str(e))
 
-        ttk.Label(frame, text="RuName:").grid(row=6, column=0, sticky="e", padx=(0, 10), pady=4)
-        ru_name_entry = ttk.Entry(frame, width=40)
-        ru_name_entry.insert(0, cfg.get("ru_name", ""))
-        ru_name_entry.grid(row=6, column=1, pady=4)
+    def _settings_save_shipping(self):
+        try:
+            de = float(self.cfg_ship_de.get().replace(",", "."))
+            eu = float(self.cfg_ship_eu.get().replace(",", "."))
+            intl = float(self.cfg_ship_intl.get().replace(",", "."))
+            handling = int(self.cfg_handling.get())
+        except ValueError:
+            messagebox.showwarning("Invalid Input", "Please enter valid numbers for all shipping costs.")
+            return
 
-        ttk.Label(frame, text="Marketplace:").grid(row=7, column=0, sticky="e", padx=(0, 10), pady=4)
-        mp_cb = ttk.Combobox(frame, values=["EBAY_DE", "EBAY_US", "EBAY_GB", "EBAY_FR", "EBAY_IT", "EBAY_ES"],
-                             width=12, state="readonly")
-        mp_cb.set(cfg.get("marketplace", "EBAY_DE"))
-        mp_cb.grid(row=7, column=1, sticky="w", pady=4)
-
-        status_label = ttk.Label(frame, text="")
-        status_label.grid(row=9, column=0, columnspan=2, pady=(5, 0))
-
-        if cfg.get("access_token"):
-            status_label.config(text="Status: Connected", foreground="green")
-        else:
-            status_label.config(text="Status: Not connected", foreground="red")
-
-        def save_and_connect():
-            cfg["client_id"] = client_id_entry.get().strip()
-            cfg["client_secret"] = client_secret_entry.get().strip()
-            cfg["ru_name"] = ru_name_entry.get().strip()
-            cfg["marketplace"] = mp_cb.get()
+        cfg = _load_ebay_config()
+        if not cfg.get("access_token"):
+            cfg["shipping_de"] = de
+            cfg["shipping_eu"] = eu
+            cfg["shipping_intl"] = intl
+            cfg["handling_days"] = handling
             _save_ebay_config(cfg)
+            self.ship_status.config(text="Saved locally (not connected to eBay).", foreground="blue")
+            return
 
-            if not cfg["client_id"] or not cfg["client_secret"] or not cfg["ru_name"]:
-                messagebox.showwarning("Missing Fields", "Please fill in all three fields.")
-                return
+        self.ship_status.config(text="Updating eBay policy...", foreground="orange")
+        self.root.update_idletasks()
 
-            auth_url = (
-                f"{_ebay_auth_base(cfg)}/oauth2/authorize"
-                f"?client_id={urllib.parse.quote(cfg['client_id'])}"
-                f"&response_type=code"
-                f"&redirect_uri={urllib.parse.quote(cfg['ru_name'])}"
-                f"&scope={urllib.parse.quote(EBAY_SCOPES)}"
-            )
-            webbrowser.open(auth_url)
-            status_label.config(text="Waiting for authorization...", foreground="orange")
-
-            paste_url = simpledialog.askstring(
-                "eBay Authorization",
-                "1. Log in to eBay in the browser window that just opened.\n"
-                "2. After granting access, you will be redirected.\n"
-                "3. Copy the FULL URL from your browser's address bar\n"
-                "   and paste it here:\n",
-                parent=win,
-            )
-            if not paste_url:
-                status_label.config(text="Status: Not connected", foreground="red")
-                return
-
-            try:
-                auth_code = _extract_auth_code(paste_url)
-                _ebay_exchange_code(auth_code)
-                _ebay_fetch_policies()
-                status_label.config(text="Status: Connected!", foreground="green")
-                messagebox.showinfo("eBay", "Successfully connected to eBay!")
-            except Exception as e:
-                status_label.config(text="Connection failed", foreground="red")
-                messagebox.showerror("eBay Error", str(e))
-
-        def save_only():
-            cfg["client_id"] = client_id_entry.get().strip()
-            cfg["client_secret"] = client_secret_entry.get().strip()
-            cfg["ru_name"] = ru_name_entry.get().strip()
-            cfg["marketplace"] = mp_cb.get()
-            _save_ebay_config(cfg)
-            messagebox.showinfo("Saved", "eBay settings saved.")
-
-        btn_row = ttk.Frame(frame)
-        btn_row.grid(row=8, column=0, columnspan=2, pady=(15, 5))
-        ttk.Button(btn_row, text="Save", command=save_only).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Save & Connect", command=save_and_connect).pack(side="left", padx=5)
+        try:
+            _ebay_update_shipping(de, eu, intl, handling)
+            self.ship_status.config(text="Shipping costs updated!", foreground="green")
+        except Exception as e:
+            self.ship_status.config(text="Update failed.", foreground="red")
+            messagebox.showerror("eBay Error", str(e))
 
     def on_ebay_list(self):
         card_id = self._get_selected_id()
@@ -1888,7 +2002,7 @@ class App:
 
         cfg = _load_ebay_config()
         if not cfg.get("access_token"):
-            messagebox.showwarning("eBay", "Not connected to eBay.\nGo to 'eBay Settings' first.")
+            messagebox.showwarning("eBay", "Not connected to eBay.\nGo to the Settings tab first.")
             return
 
         card = load_card(card_id)
