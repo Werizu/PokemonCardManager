@@ -1,4 +1,4 @@
-# Poke Inv
+# Pokemon Card Manager
 
 A macOS desktop app for managing your Pokemon card collection. Track inventory, grading, sales, and photos — all stored locally in an Excel workbook.
 
@@ -8,17 +8,18 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 - **Collection view** with filtering (All / Collection / For Sale / Sold / Grading)
 - **Grading tracker** — submit cards for grading and record results
 - **Partial selling** — sell part of your stock, track sales with profit calculation
-- **eBay integration** — create draft listings directly from your inventory
+- **eBay integration** — create draft listings or publish directly from your inventory
 - **Photo upload** from your phone via local WiFi (built-in web server)
 - **Cardmarket links** — double-click a card to open its Cardmarket page
 - **Statistics** tab with investment totals, grading overview, and sales summary
+- **Auto-update** — check for new versions directly from the app
 - **Excel-based storage** — your data lives in a standard `.xlsx` file you can open anytime
 
 ## Requirements
 
 - macOS
-- Python 3.10+ (pre-installed on modern macOS, or install via [python.org](https://www.python.org/downloads/))
-- Xcode Command Line Tools (`xcode-select --install`) for the native launcher
+- Python 3.10+
+- Dependencies: `openpyxl`, `Pillow`
 
 ## Installation
 
@@ -64,27 +65,72 @@ When the app is running, it starts a local web server for phone uploads:
 3. Enter sale price, platform, fees, and quantity to sell
 4. The inventory quantity decreases; a sales record is created
 
-### eBay Listings
+## eBay Integration
 
-#### One-time setup
+The app can create listings on eBay directly from your inventory — either as API drafts or published live.
+
+### One-Time Setup
+
+#### 1. Create an eBay Developer Account
 
 1. Go to [developer.ebay.com](https://developer.ebay.com) and sign in with your eBay account
-2. Click **Create Application** and select **Production**
-3. Under **User Tokens** → **Get a Token from eBay via Your Application**:
-   - Set **Auth Accepted URL** to `http://localhost:8089/ebay/callback`
-   - Set **Auth Declined URL** to `http://localhost:8089/ebay/declined`
-4. Note down your **App ID** (Client ID), **Cert ID** (Client Secret), and **RuName** (listed under the redirect URLs)
-5. In Poke Inv, click **eBay Settings** (right side of the Collection tab)
-6. Enter Client ID, Client Secret, and RuName
-7. Set Marketplace to your region (e.g. `EBAY_DE` for Germany)
-8. Click **Save & Connect** — eBay opens in your browser, authorize the app
+2. Go to **My Account > Application Access Keys**
+3. Click **Create a keyset** and choose a name (e.g. "Pokemon Card Manager")
+4. If your keyset shows "disabled", click **Apply for exemption** under Marketplace Account Deletion and select "I do not persist eBay data"
+5. Note your **App ID (Client ID)** and **Cert ID (Client Secret)**
 
-#### Creating listings
+#### 2. Configure OAuth Redirect URL
+
+1. On the Application Keys page, click **User Tokens** next to your keyset
+2. Select **OAuth (new security)**
+3. Click **Get a Token from eBay via Your Application**
+4. Click **Add eBay Redirect URL** and enter:
+   - **Auth Accepted URL**: `https://yourdomain.com/ebay/callback` (any HTTPS URL you own)
+   - **Auth Declined URL**: `https://yourdomain.com/ebay/declined`
+   - **Privacy Policy URL**: `https://yourdomain.com/privacy`
+   - **Display Title**: e.g. "Pokemon Card Manager"
+5. Save — eBay will generate a **RuName** (e.g. `Your_Name-AppName-PRD-xxxxxx`)
+
+> **Note:** eBay requires a real HTTPS domain — `localhost` is not accepted. The redirect URL does not need to actually host anything. After authorizing, you simply copy the URL from your browser and paste it into the app.
+
+#### 3. Connect in the App
+
+1. Open the app and click **eBay Settings**
+2. Enter your **Client ID**, **Client Secret**, and **RuName**
+3. Select your **Marketplace** (e.g. `EBAY_DE` for Germany)
+4. Click **Save & Connect**
+5. Your browser opens the eBay login page — log in and grant access
+6. After authorization, eBay redirects to your redirect URL. The page may show an error — **that's normal**
+7. **Copy the full URL** from your browser's address bar (it contains `?code=...`)
+8. Paste it into the dialog in the app
+9. Done — the app exchanges the code for an access token automatically
+
+### Creating Listings
 
 1. Select a card in the **Collection** tab
 2. Click **List on eBay**
-3. Confirm the price and quantity
-4. A draft listing is created — review and publish it in your [eBay Seller Hub](https://www.ebay.com/sh/overview)
+3. Set your price and quantity
+4. Choose:
+   - **Save as Draft** — stores the offer in the eBay API for later publishing
+   - **Publish Now** — creates a live listing on eBay immediately
+
+The app automatically handles:
+- **Condition mapping** — ungraded cards use eBay's card condition descriptors (Near Mint, Excellent, etc.); graded cards include the grading service (PSA, BGS, CGC, ...) and grade
+- **Photo upload** — if the card has a photo, it is uploaded to eBay automatically
+- **Duplicate detection** — if an offer already exists for the card, it is updated instead of creating a duplicate
+
+## Auto-Update
+
+Click **Check for Updates** in the Collection tab to check for a newer version on GitHub. If an update is available, the app downloads the latest code and restarts automatically.
+
+Only the application code is updated — your data is never touched:
+
+| Preserved (your data) | Updated |
+|------------------------|---------|
+| `Pokemon-Inventar.xlsx` | `pokemon_card_manager.py` |
+| `Fotos/`, `Karten/` | |
+| `.ebay_config.json` | |
+| `.app_config.json`, `.card_urls.json` | |
 
 ## Data Storage
 
@@ -94,9 +140,10 @@ All data is stored locally in `~/Pokemon-Sammlung/`:
 |------|---------|
 | `Pokemon-Inventar.xlsx` | Inventory, sales, and dashboard |
 | `Fotos/` | Card photos (named by card ID) |
-| `Karten/` | Additional card files |
+| `Karten/` | Card data as JSON files |
 | `.card_urls.json` | Cardmarket URLs per card |
 | `.app_config.json` | Window size and preferences |
+| `.ebay_config.json` | eBay credentials and tokens (do not share) |
 
 ## License
 

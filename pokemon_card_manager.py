@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import base64
+import hashlib
 import json
 import os
 import re
 import shutil
 import socket
+import sys
 import threading
 import time as _time
 import tkinter as tk
@@ -21,6 +23,9 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
+
+VERSION = "1.1.0"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
 EXCEL_PATH = os.path.join(BASE_DIR, "Pokemon-Inventar.xlsx")
@@ -79,13 +84,30 @@ GRADE_ALIASES = {
 
 # eBay API
 EBAY_CONFIG_PATH = os.path.join(BASE_DIR, ".ebay_config.json")
-EBAY_OAUTH_PORT = 8089
 EBAY_SCOPES = ("https://api.ebay.com/oauth/api_scope/sell.inventory"
                " https://api.ebay.com/oauth/api_scope/sell.account")
 
-CONDITION_TO_EBAY = {
-    "Mint": "2750", "Near Mint": "2750", "Excellent": "3000",
-    "Good": "4000", "Light Played": "5000", "Played": "5000", "Poor": "5000",
+CONDITION_TO_EBAY_CARD = {
+    "Mint": "400010", "Near Mint": "400010",
+    "Excellent": "400015", "Good": "400016",
+    "Light Played": "400016", "Played": "400017", "Poor": "400017",
+}
+
+GRADING_SERVICE_TO_EBAY = {
+    "PSA": "275010", "BCCG": "275011", "BVG": "275012", "BGS": "275013",
+    "CGC": "275015", "SGC": "275016", "KSA": "275017", "GMA": "275018",
+    "HGA": "275019", "ISA": "2750110", "PCA": "2750111", "GSG": "2750112",
+    "PGS": "2750113", "MNT": "2750114", "TAG": "2750115", "Rare": "2750116",
+    "RCG": "2750117", "PCG": "2750118", "Ace": "2750119", "CGA": "2750120",
+    "TCG": "2750121", "ARK": "2750122", "AGS": "2750124", "DSG": "2750125",
+}
+
+GRADE_TO_EBAY = {
+    "10": "275020", "9.5": "275021", "9": "275022", "8.5": "275023",
+    "8": "275024", "7.5": "275025", "7": "275026", "6.5": "275027",
+    "6": "275028", "5.5": "275029", "5": "2750210", "4.5": "2750211",
+    "4": "2750212", "3.5": "2750213", "3": "2750214", "2.5": "2750215",
+    "2": "2750216", "1.5": "2750217", "1": "2750218",
 }
 
 
@@ -627,6 +649,54 @@ def _ebay_api(method, path, body=None):
         raise Exception(f"eBay API error ({e.code}): {err}")
 
 
+def _ebay_upload_image(image_path):
+    token = _ebay_token()
+    if not token:
+        raise Exception("Not connected to eBay.")
+    cfg = _load_ebay_config()
+    url = "https://api.ebay.com/ws/api.dll"
+    if cfg.get("sandbox"):
+        url = "https://api.sandbox.ebay.com/ws/api.dll"
+
+    boundary = "----FormBoundary7MA4YWxkTrZu0gW"
+    xml_part = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f'<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>'
+        '<PictureName>card</PictureName>'
+        '</UploadSiteHostedPicturesRequest>'
+    )
+
+    with open(image_path, "rb") as f:
+        image_data = f.read()
+
+    ext = os.path.splitext(image_path)[1].lower()
+    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="XML Payload"\r\n'
+        f"Content-Type: text/xml\r\n\r\n"
+        f"{xml_part}\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="card{ext}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode() + image_data + f"\r\n--{boundary}--\r\n".encode()
+
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "X-EBAY-API-SITEID": "77",
+        "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    })
+    with urllib.request.urlopen(req) as resp:
+        raw = resp.read().decode()
+    match = re.search(r"<FullURL>(.+?)</FullURL>", raw)
+    if match:
+        return match.group(1)
+    raise Exception(f"Image upload failed: {raw[:300]}")
+
+
 def _ebay_fetch_policies():
     cfg = _load_ebay_config()
     mp = cfg.get("marketplace", "EBAY_DE")
@@ -680,22 +750,43 @@ def ebay_create_draft(card_id, price, quantity):
     description = "\n".join(desc_lines)
 
     sku = f"PKM-{card_id:04d}"
-    cond_id = CONDITION_TO_EBAY.get(condition_raw, "3000")
+
     if grading_service:
-        cond_id = "2750"
+        svc_id = GRADING_SERVICE_TO_EBAY.get(grading_service.upper(), "2750123")
+        grade_str = str(grade).strip()
+        grade_id = GRADE_TO_EBAY.get(grade_str, "275020")
+        cond_enum = "LIKE_NEW"
+        cond_descriptors = [
+            {"name": "27501", "values": [svc_id]},
+            {"name": "27502", "values": [grade_id]},
+        ]
+    else:
+        card_cond_id = CONDITION_TO_EBAY_CARD.get(condition_raw, "400010")
+        cond_enum = "USED_VERY_GOOD"
+        cond_descriptors = [
+            {"name": "40001", "values": [card_cond_id]},
+        ]
+
+    image_urls = []
+    photo_path = get_photo_path(card_id)
+    if photo_path:
+        img_url = _ebay_upload_image(photo_path)
+        image_urls.append(img_url)
 
     inv_item = {
         "product": {
             "title": title,
             "description": description,
+            "imageUrls": image_urls,
             "aspects": {
-                "Card Name": [card["name"]],
-                "Set": [card["set"]],
-                "Game": ["Pokémon TCG"],
-                "Language": [card["language"]],
+                "Kartenname": [card["name"]],
+                "Set/Erweiterung": [card["set"]],
+                "Spiel": ["Pokémon TCG"],
+                "Sprache": [card["language"]],
             },
         },
-        "condition": cond_id,
+        "condition": cond_enum,
+        "conditionDescriptors": cond_descriptors,
         "conditionDescription": f"{grading_service} {grade}" if grading_service else condition_raw,
         "availability": {
             "shipToLocationAvailability": {"quantity": quantity}
@@ -703,6 +794,7 @@ def ebay_create_draft(card_id, price, quantity):
     }
     _ebay_api("PUT", f"/sell/inventory/v1/inventory_item/{sku}", inv_item)
 
+    loc_key = _ebay_ensure_location()
     cfg = _load_ebay_config()
     mp = cfg.get("marketplace", "EBAY_DE")
     offer = {
@@ -712,6 +804,7 @@ def ebay_create_draft(card_id, price, quantity):
         "listingDescription": description,
         "availableQuantity": quantity,
         "categoryId": "183454",
+        "merchantLocationKey": loc_key,
         "pricingSummary": {
             "price": {"currency": "EUR", "value": f"{price:.2f}"}
         },
@@ -722,34 +815,69 @@ def ebay_create_draft(card_id, price, quantity):
         if pid:
             offer["listingPolicies"][f"{kind}PolicyId"] = pid
 
-    result = _ebay_api("POST", "/sell/inventory/v1/offer", offer)
-    return result.get("offerId", "created")
-
-
-class _EbayCallbackHandler(BaseHTTPRequestHandler):
-    auth_code = None
-
-    def log_message(self, *args):
+    existing_offer_id = None
+    try:
+        offers_result = _ebay_api("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}")
+        for o in offers_result.get("offers", []):
+            if o.get("sku") == sku:
+                existing_offer_id = o.get("offerId")
+                break
+    except Exception:
         pass
 
-    def do_GET(self):
-        if "/ebay/callback" in self.path:
-            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
-            params = parse_qs(qs)
-            code = params.get("code", [None])[0]
-            if code:
-                _EbayCallbackHandler.auth_code = code
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.end_headers()
-                self.wfile.write(
-                    b"<html><body style='text-align:center;padding:60px;font-family:system-ui'>"
-                    b"<h2 style='color:#4caf50'>Connected!</h2>"
-                    b"<p>You can close this tab and return to the app.</p></body></html>"
-                )
-                return
-        self.send_response(404)
-        self.end_headers()
+    if existing_offer_id:
+        _ebay_api("PUT", f"/sell/inventory/v1/offer/{existing_offer_id}", offer)
+        return existing_offer_id, None
+    else:
+        result = _ebay_api("POST", "/sell/inventory/v1/offer", offer)
+        return result.get("offerId", "created"), None
+
+
+def _ebay_ensure_location():
+    cfg = _load_ebay_config()
+    loc_key = "default_location"
+    mp = cfg.get("marketplace", "EBAY_DE")
+    mp_to_country = {
+        "EBAY_DE": "DE", "EBAY_US": "US", "EBAY_GB": "GB",
+        "EBAY_FR": "FR", "EBAY_IT": "IT", "EBAY_ES": "ES",
+    }
+    country = mp_to_country.get(mp, "DE")
+    try:
+        _ebay_api("GET", f"/sell/inventory/v1/location/{loc_key}")
+        return loc_key
+    except Exception:
+        pass
+    body = {
+        "location": {
+            "address": {
+                "postalCode": "46487",
+                "country": country,
+            }
+        },
+        "name": "Default Location",
+        "merchantLocationStatus": "ENABLED",
+        "locationTypes": ["WAREHOUSE"],
+    }
+    _ebay_api("POST", f"/sell/inventory/v1/location/{loc_key}", body)
+    cfg["location_key"] = loc_key
+    _save_ebay_config(cfg)
+    return loc_key
+
+
+def ebay_publish_offer(offer_id):
+    result = _ebay_api("POST", f"/sell/inventory/v1/offer/{offer_id}/publish")
+    return result.get("listingId", "")
+
+
+def _extract_auth_code(text):
+    text = text.strip()
+    if "code=" in text:
+        qs = text.split("?", 1)[1] if "?" in text else text
+        params = parse_qs(qs)
+        code = params.get("code", [None])[0]
+        if code:
+            return code
+    return text
 
 
 def get_photo_path(card_id):
@@ -959,6 +1087,37 @@ def start_photo_server():
 
 
 # ============================================================
+# AUTO-UPDATE
+# ============================================================
+
+SCRIPT_PATH = os.path.join(BASE_DIR, "pokemon_card_manager.py")
+
+
+def check_for_update():
+    req = urllib.request.Request(GITHUB_RAW_URL, headers={"User-Agent": "PokemonCardManager"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        remote_content = resp.read()
+    with open(SCRIPT_PATH, "rb") as f:
+        local_hash = hashlib.sha256(f.read()).hexdigest()
+    remote_hash = hashlib.sha256(remote_content).hexdigest()
+    if local_hash == remote_hash:
+        return False, VERSION, None
+    remote_text = remote_content.decode("utf-8", errors="replace")
+    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', remote_text, re.MULTILINE)
+    remote_version = match.group(1) if match else "unknown"
+    return True, remote_version, remote_content
+
+
+def apply_update(content):
+    with open(SCRIPT_PATH, "wb") as f:
+        f.write(content)
+
+
+def restart_app():
+    os.execv(sys.executable, [sys.executable, SCRIPT_PATH])
+
+
+# ============================================================
 # GUI
 # ============================================================
 
@@ -1144,6 +1303,8 @@ class App:
         ttk.Button(btn_frame, text="Delete Card", width=18, command=self.on_delete).pack(pady=20)
         ttk.Button(btn_frame, text="eBay Settings", width=18, command=self.on_ebay_settings).pack(pady=5)
         ttk.Button(btn_frame, text="Refresh", width=18, command=self.refresh_collection).pack(pady=5)
+        ttk.Separator(btn_frame, orient="horizontal").pack(fill="x", pady=8)
+        ttk.Button(btn_frame, text="Check for Updates", width=18, command=self.on_check_update).pack(pady=5)
 
         # --- Tab 3: Statistics ---
         stats_frame = ttk.Frame(notebook, padding=20)
@@ -1630,9 +1791,9 @@ class App:
 
         ttk.Label(frame, text="1. Go to developer.ebay.com and create an app",
                   foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(frame, text="2. Set Auth Redirect URL to: http://localhost:8089/ebay/callback",
+        ttk.Label(frame, text="2. Set Auth Redirect URL to any HTTPS domain you own",
                   foreground="gray").grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
-        ttk.Label(frame, text="3. Enter your credentials below:",
+        ttk.Label(frame, text="3. Enter your credentials below and click 'Connect'",
                   foreground="gray").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 10))
 
         ttk.Label(frame, text="Client ID:").grid(row=4, column=0, sticky="e", padx=(0, 10), pady=4)
@@ -1675,17 +1836,6 @@ class App:
                 messagebox.showwarning("Missing Fields", "Please fill in all three fields.")
                 return
 
-            server = HTTPServer(("127.0.0.1", EBAY_OAUTH_PORT), _EbayCallbackHandler)
-            _EbayCallbackHandler.auth_code = None
-            _serving = [True]
-
-            def serve():
-                server.timeout = 2
-                while _serving[0] and _EbayCallbackHandler.auth_code is None:
-                    server.handle_request()
-
-            threading.Thread(target=serve, daemon=True).start()
-
             auth_url = (
                 f"{_ebay_auth_base(cfg)}/oauth2/authorize"
                 f"?client_id={urllib.parse.quote(cfg['client_id'])}"
@@ -1696,25 +1846,27 @@ class App:
             webbrowser.open(auth_url)
             status_label.config(text="Waiting for authorization...", foreground="orange")
 
-            def check_auth():
-                if _EbayCallbackHandler.auth_code:
-                    _serving[0] = False
-                    try:
-                        server.server_close()
-                    except Exception:
-                        pass
-                    try:
-                        _ebay_exchange_code(_EbayCallbackHandler.auth_code)
-                        _ebay_fetch_policies()
-                        status_label.config(text="Status: Connected!", foreground="green")
-                        messagebox.showinfo("eBay", "Successfully connected to eBay!")
-                    except Exception as e:
-                        status_label.config(text="Connection failed", foreground="red")
-                        messagebox.showerror("eBay Error", str(e))
-                else:
-                    self.root.after(500, check_auth)
+            paste_url = simpledialog.askstring(
+                "eBay Authorization",
+                "1. Log in to eBay in the browser window that just opened.\n"
+                "2. After granting access, you will be redirected.\n"
+                "3. Copy the FULL URL from your browser's address bar\n"
+                "   and paste it here:\n",
+                parent=win,
+            )
+            if not paste_url:
+                status_label.config(text="Status: Not connected", foreground="red")
+                return
 
-            self.root.after(500, check_auth)
+            try:
+                auth_code = _extract_auth_code(paste_url)
+                _ebay_exchange_code(auth_code)
+                _ebay_fetch_policies()
+                status_label.config(text="Status: Connected!", foreground="green")
+                messagebox.showinfo("eBay", "Successfully connected to eBay!")
+            except Exception as e:
+                status_label.config(text="Connection failed", foreground="red")
+                messagebox.showerror("eBay Error", str(e))
 
         def save_only():
             cfg["client_id"] = client_id_entry.get().strip()
@@ -1766,33 +1918,56 @@ class App:
         qty_entry.grid(row=2, column=1, sticky="w", pady=4)
 
         status_lbl = ttk.Label(frame, text="")
-        status_lbl.grid(row=4, column=0, columnspan=2, pady=(5, 0))
+        status_lbl.grid(row=5, column=0, columnspan=2, pady=(5, 0))
 
-        def create():
+        def _validate_input():
             try:
                 price = float(price_entry.get().strip().replace(",", "."))
                 qty = int(qty_entry.get().strip())
             except ValueError:
                 messagebox.showwarning("Invalid Input", "Price must be a number, quantity a whole number.")
-                return
+                return None, None
             if qty < 1 or qty > total_qty:
                 messagebox.showwarning("Invalid Quantity", f"Must be between 1 and {total_qty}.")
+                return None, None
+            return price, qty
+
+        def save_draft():
+            price, qty = _validate_input()
+            if price is None:
                 return
-
-            status_lbl.config(text="Creating listing...", foreground="orange")
+            status_lbl.config(text="Creating draft...", foreground="orange")
             win.update()
-
             try:
-                offer_id = ebay_create_draft(card_id, price, qty)
+                offer_id, _ = ebay_create_draft(card_id, price, qty)
                 win.destroy()
-                messagebox.showinfo("eBay", f"Draft listing created!\n\nOffer ID: {offer_id}\n\n"
-                                    "Go to eBay Seller Hub > Listings to review and publish.")
+                messagebox.showinfo("eBay", f"Draft saved!\n\nOffer ID: {offer_id}\n\n"
+                                    "The draft is stored in the eBay API.\n"
+                                    "Use 'List on eBay' to publish later.")
             except Exception as e:
                 status_lbl.config(text="Failed", foreground="red")
                 messagebox.showerror("eBay Error", str(e))
 
-        ttk.Button(frame, text="Create Draft Listing", command=create).grid(
-            row=3, column=0, columnspan=2, pady=(10, 0))
+        def publish_now():
+            price, qty = _validate_input()
+            if price is None:
+                return
+            status_lbl.config(text="Publishing listing...", foreground="orange")
+            win.update()
+            try:
+                offer_id, _ = ebay_create_draft(card_id, price, qty)
+                listing_id = ebay_publish_offer(offer_id)
+                win.destroy()
+                messagebox.showinfo("eBay", f"Listing published!\n\nListing ID: {listing_id}\n\n"
+                                    f"View at: ebay.de/itm/{listing_id}")
+            except Exception as e:
+                status_lbl.config(text="Failed", foreground="red")
+                messagebox.showerror("eBay Error", str(e))
+
+        btn_row = ttk.Frame(frame)
+        btn_row.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Publish Now", command=publish_now).pack(side="left", padx=5)
         price_entry.focus()
 
     def _on_tree_double_click(self, event):
@@ -1870,6 +2045,34 @@ class App:
             return
         delete_card(card_id)
         self.refresh_collection()
+
+    def on_check_update(self):
+        try:
+            has_update, remote_version, content = check_for_update()
+        except Exception as e:
+            messagebox.showerror("Update Error", f"Could not check for updates:\n{e}")
+            return
+
+        if not has_update:
+            messagebox.showinfo("Up to Date", f"You are running the latest version (v{VERSION}).")
+            return
+
+        if not messagebox.askyesno(
+            "Update Available",
+            f"New version v{remote_version} available.\n"
+            f"Current version: v{VERSION}\n\n"
+            "Download and install?\n"
+            "(Your data will not be affected.)",
+        ):
+            return
+
+        try:
+            apply_update(content)
+            messagebox.showinfo("Updated", f"Updated to v{remote_version}.\nThe app will restart now.")
+            self._save_state()
+            restart_app()
+        except Exception as e:
+            messagebox.showerror("Update Error", f"Could not install update:\n{e}")
 
 
 def _activate_window():
