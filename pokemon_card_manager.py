@@ -1992,8 +1992,11 @@ class App:
             _ebay_update_shipping(de, eu, intl, handling)
             self.ship_status.config(text="Shipping costs updated!", foreground="green")
         except Exception as e:
-            self.ship_status.config(text="Update failed.", foreground="red")
-            messagebox.showerror("eBay Error", str(e))
+            if "20403" in str(e) or "identisch" in str(e):
+                self.ship_status.config(text="Shipping costs saved (already up to date on eBay).", foreground="green")
+            else:
+                self.ship_status.config(text="Update failed.", foreground="red")
+                messagebox.showerror("eBay Error", str(e))
 
     def on_ebay_list(self):
         card_id = self._get_selected_id()
