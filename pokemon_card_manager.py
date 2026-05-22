@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -765,7 +765,9 @@ def _ebay_update_shipping(de_cost, eu_cost, intl_cost, handling_days=2):
     _save_ebay_config(cfg)
 
 
-def ebay_create_draft(card_id, price, quantity):
+def ebay_create_draft(card_id, price, quantity, listing_format="FIXED_PRICE",
+                      auction_start_price=None, auction_reserve_price=None,
+                      auction_duration=None, buy_it_now_price=None):
     card = load_card(card_id)
     if not card:
         raise Exception(f"Card #{card_id} not found")
@@ -850,19 +852,33 @@ def ebay_create_draft(card_id, price, quantity):
     loc_key = _ebay_ensure_location()
     cfg = _load_ebay_config()
     mp = cfg.get("marketplace", "EBAY_DE")
+
+    if listing_format == "AUCTION":
+        pricing = {
+            "auctionStartPrice": {"currency": "EUR", "value": f"{auction_start_price:.2f}"},
+        }
+        if auction_reserve_price:
+            pricing["auctionReservePrice"] = {"currency": "EUR", "value": f"{auction_reserve_price:.2f}"}
+        if buy_it_now_price:
+            pricing["price"] = {"currency": "EUR", "value": f"{buy_it_now_price:.2f}"}
+    else:
+        pricing = {
+            "price": {"currency": "EUR", "value": f"{price:.2f}"}
+        }
+
     offer = {
         "sku": sku,
         "marketplaceId": mp,
-        "format": "FIXED_PRICE",
+        "format": listing_format,
         "listingDescription": description,
-        "availableQuantity": quantity,
+        "availableQuantity": 1 if listing_format == "AUCTION" else quantity,
         "categoryId": "183454",
         "merchantLocationKey": loc_key,
-        "pricingSummary": {
-            "price": {"currency": "EUR", "value": f"{price:.2f}"}
-        },
+        "pricingSummary": pricing,
         "listingPolicies": {},
     }
+    if listing_format == "AUCTION" and auction_duration:
+        offer["listingDuration"] = auction_duration
     for kind in ("fulfillment", "payment", "return"):
         pid = cfg.get(f"{kind}_policy_id")
         if pid:
@@ -2109,67 +2125,158 @@ class App:
         ttk.Label(frame, text=f"{card['name']} — {card['set']}",
                   font=("Helvetica", 12, "bold")).grid(row=0, column=0, columnspan=2, pady=(0, 10))
 
-        ttk.Label(frame, text="Price (EUR):").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
-        price_entry = ttk.Entry(frame, width=15)
-        price_entry.insert(0, f"{card['price']:.2f}" if card["price"] else "")
-        price_entry.grid(row=1, column=1, sticky="w", pady=4)
+        # --- Format selection ---
+        ttk.Label(frame, text="Format:").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        format_var = tk.StringVar(value="FIXED_PRICE")
+        fmt_frame = ttk.Frame(frame)
+        fmt_frame.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Radiobutton(fmt_frame, text="Fixed Price", variable=format_var, value="FIXED_PRICE",
+                        command=lambda: _on_format_change()).pack(side="left", padx=(0, 10))
+        ttk.Radiobutton(fmt_frame, text="Auction", variable=format_var, value="AUCTION",
+                        command=lambda: _on_format_change()).pack(side="left")
 
-        ttk.Label(frame, text="Quantity:").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
-        qty_entry = ttk.Entry(frame, width=8)
+        # --- Fixed Price fields ---
+        fp_frame = ttk.Frame(frame)
+        fp_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        ttk.Label(fp_frame, text="Price (EUR):").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        price_entry = ttk.Entry(fp_frame, width=15)
+        price_entry.insert(0, f"{card['price']:.2f}" if card["price"] else "")
+        price_entry.grid(row=0, column=1, sticky="w", pady=4)
+
+        ttk.Label(fp_frame, text="Quantity:").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        qty_entry = ttk.Entry(fp_frame, width=8)
         qty_entry.insert(0, str(total_qty))
-        qty_entry.grid(row=2, column=1, sticky="w", pady=4)
+        qty_entry.grid(row=1, column=1, sticky="w", pady=4)
+
+        # --- Auction fields ---
+        auc_frame = ttk.Frame(frame)
+
+        ttk.Label(auc_frame, text="Start Price (EUR):").grid(row=0, column=0, sticky="e", padx=(0, 10), pady=4)
+        auc_start_entry = ttk.Entry(auc_frame, width=15)
+        auc_start_entry.insert(0, "1.00")
+        auc_start_entry.grid(row=0, column=1, sticky="w", pady=4)
+
+        ttk.Label(auc_frame, text="Duration:").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        duration_var = tk.StringVar(value="DAYS_7")
+        dur_combo = ttk.Combobox(auc_frame, textvariable=duration_var, width=12, state="readonly",
+                                 values=["DAYS_3", "DAYS_5", "DAYS_7", "DAYS_10"])
+        dur_combo.grid(row=1, column=1, sticky="w", pady=4)
+
+        ttk.Label(auc_frame, text="Buy It Now (EUR):").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
+        auc_bin_entry = ttk.Entry(auc_frame, width=15)
+        if card["price"]:
+            auc_bin_entry.insert(0, f"{card['price']:.2f}")
+        auc_bin_entry.grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Label(auc_frame, text="(optional)", foreground="gray").grid(row=2, column=2, sticky="w", padx=5)
+
+        ttk.Label(auc_frame, text="Reserve Price (EUR):").grid(row=3, column=0, sticky="e", padx=(0, 10), pady=4)
+        auc_reserve_entry = ttk.Entry(auc_frame, width=15)
+        auc_reserve_entry.grid(row=3, column=1, sticky="w", pady=4)
+        ttk.Label(auc_frame, text="(optional)", foreground="gray").grid(row=3, column=2, sticky="w", padx=5)
+
+        def _on_format_change():
+            if format_var.get() == "AUCTION":
+                fp_frame.grid_remove()
+                auc_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+                auc_start_entry.focus()
+            else:
+                auc_frame.grid_remove()
+                fp_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+                price_entry.focus()
 
         status_lbl = ttk.Label(frame, text="")
         status_lbl.grid(row=5, column=0, columnspan=2, pady=(5, 0))
 
+        def _parse_optional_eur(entry):
+            val = entry.get().strip().replace(",", ".")
+            if not val:
+                return None
+            return float(val)
+
         def _validate_input():
-            try:
-                price = float(price_entry.get().strip().replace(",", "."))
-                qty = int(qty_entry.get().strip())
-            except ValueError:
-                messagebox.showwarning("Invalid Input", "Price must be a number, quantity a whole number.")
-                return None, None
-            if qty < 1 or qty > total_qty:
-                messagebox.showwarning("Invalid Quantity", f"Must be between 1 and {total_qty}.")
-                return None, None
-            return price, qty
+            fmt = format_var.get()
+            if fmt == "FIXED_PRICE":
+                try:
+                    price = float(price_entry.get().strip().replace(",", "."))
+                    qty = int(qty_entry.get().strip())
+                except ValueError:
+                    messagebox.showwarning("Invalid Input", "Price must be a number, quantity a whole number.", parent=win)
+                    return None
+                if price <= 0:
+                    messagebox.showwarning("Invalid Input", "Price must be greater than 0.", parent=win)
+                    return None
+                if qty < 1 or qty > total_qty:
+                    messagebox.showwarning("Invalid Quantity", f"Must be between 1 and {total_qty}.", parent=win)
+                    return None
+                return {"format": "FIXED_PRICE", "price": price, "quantity": qty}
+            else:
+                try:
+                    start_price = float(auc_start_entry.get().strip().replace(",", "."))
+                except ValueError:
+                    messagebox.showwarning("Invalid Input", "Start price must be a number.", parent=win)
+                    return None
+                if start_price <= 0:
+                    messagebox.showwarning("Invalid Input", "Start price must be greater than 0.", parent=win)
+                    return None
+                try:
+                    reserve = _parse_optional_eur(auc_reserve_entry)
+                    bin_price = _parse_optional_eur(auc_bin_entry)
+                except ValueError:
+                    messagebox.showwarning("Invalid Input", "Reserve / Buy It Now must be valid numbers.", parent=win)
+                    return None
+                if reserve is not None and reserve <= start_price:
+                    messagebox.showwarning("Invalid Input", "Reserve price must be higher than start price.", parent=win)
+                    return None
+                if bin_price is not None and bin_price <= start_price:
+                    messagebox.showwarning("Invalid Input", "Buy It Now price must be higher than start price.", parent=win)
+                    return None
+                return {
+                    "format": "AUCTION",
+                    "auction_start_price": start_price,
+                    "auction_reserve_price": reserve,
+                    "buy_it_now_price": bin_price,
+                    "auction_duration": duration_var.get(),
+                }
 
-        def save_draft():
-            price, qty = _validate_input()
-            if price is None:
+        def _create_listing(publish):
+            params = _validate_input()
+            if params is None:
                 return
-            status_lbl.config(text="Creating draft...", foreground="orange")
+            fmt = params.pop("format")
+            action = "Publishing listing..." if publish else "Creating draft..."
+            status_lbl.config(text=action, foreground="orange")
             win.update()
             try:
-                offer_id, _ = ebay_create_draft(card_id, price, qty)
-                win.destroy()
-                messagebox.showinfo("eBay", f"Draft saved!\n\nOffer ID: {offer_id}\n\n"
-                                    "The draft is stored in the eBay API.\n"
-                                    "Use 'List on eBay' to publish later.")
-            except Exception as e:
-                status_lbl.config(text="Failed", foreground="red")
-                messagebox.showerror("eBay Error", str(e))
-
-        def publish_now():
-            price, qty = _validate_input()
-            if price is None:
-                return
-            status_lbl.config(text="Publishing listing...", foreground="orange")
-            win.update()
-            try:
-                offer_id, _ = ebay_create_draft(card_id, price, qty)
-                listing_id = ebay_publish_offer(offer_id)
-                win.destroy()
-                messagebox.showinfo("eBay", f"Listing published!\n\nListing ID: {listing_id}\n\n"
-                                    f"View at: ebay.de/itm/{listing_id}")
+                if fmt == "FIXED_PRICE":
+                    offer_id, _ = ebay_create_draft(card_id, params["price"], params["quantity"])
+                else:
+                    offer_id, _ = ebay_create_draft(
+                        card_id, 0, 1, listing_format="AUCTION",
+                        auction_start_price=params["auction_start_price"],
+                        auction_reserve_price=params.get("auction_reserve_price"),
+                        auction_duration=params["auction_duration"],
+                        buy_it_now_price=params.get("buy_it_now_price"),
+                    )
+                if publish:
+                    listing_id = ebay_publish_offer(offer_id)
+                    win.destroy()
+                    fmt_label = "Auction" if fmt == "AUCTION" else "Listing"
+                    messagebox.showinfo("eBay", f"{fmt_label} published!\n\nListing ID: {listing_id}\n\n"
+                                        f"View at: ebay.de/itm/{listing_id}")
+                else:
+                    win.destroy()
+                    messagebox.showinfo("eBay", f"Draft saved!\n\nOffer ID: {offer_id}\n\n"
+                                        "The draft is stored in the eBay API.\n"
+                                        "Use 'List on eBay' to publish later.")
             except Exception as e:
                 status_lbl.config(text="Failed", foreground="red")
                 messagebox.showerror("eBay Error", str(e))
 
         btn_row = ttk.Frame(frame)
         btn_row.grid(row=3, column=0, columnspan=2, pady=(10, 0))
-        ttk.Button(btn_row, text="Save as Draft", command=save_draft).pack(side="left", padx=5)
-        ttk.Button(btn_row, text="Publish Now", command=publish_now).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Save as Draft", command=lambda: _create_listing(False)).pack(side="left", padx=5)
+        ttk.Button(btn_row, text="Publish Now", command=lambda: _create_listing(True)).pack(side="left", padx=5)
         price_entry.focus()
 
     def _on_tree_double_click(self, event):
