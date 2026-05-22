@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -499,9 +499,9 @@ def delete_card(card_id):
             break
     wb.save(EXCEL_PATH)
     wb.close()
-    photo = get_photo_path(card_id)
-    if photo:
-        os.remove(photo)
+    photo_dir = os.path.join(PHOTO_DIR, str(card_id))
+    if os.path.isdir(photo_dir):
+        shutil.rmtree(photo_dir)
 
 
 def _load_config():
@@ -822,8 +822,7 @@ def ebay_create_draft(card_id, price, quantity):
         ]
 
     image_urls = []
-    photo_path = get_photo_path(card_id)
-    if photo_path:
+    for photo_path in get_photo_paths(card_id):
         img_url = _ebay_upload_image(photo_path)
         image_urls.append(img_url)
 
@@ -934,31 +933,77 @@ def _extract_auth_code(text):
     return text
 
 
+def _migrate_photos():
+    """Move legacy Fotos/{id}.ext files into Fotos/{id}/ folders."""
+    for fname in os.listdir(PHOTO_DIR):
+        fpath = os.path.join(PHOTO_DIR, fname)
+        if not os.path.isfile(fpath):
+            continue
+        name, ext = os.path.splitext(fname)
+        if not name.isdigit():
+            continue
+        card_dir = os.path.join(PHOTO_DIR, name)
+        os.makedirs(card_dir, exist_ok=True)
+        shutil.move(fpath, os.path.join(card_dir, f"1{ext}"))
+
+_migrate_photos()
+
+
+def _card_photo_dir(card_id):
+    d = os.path.join(PHOTO_DIR, str(card_id))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def get_photo_paths(card_id):
+    d = os.path.join(PHOTO_DIR, str(card_id))
+    if not os.path.isdir(d):
+        return []
+    files = []
+    for f in sorted(os.listdir(d)):
+        if f.lower().endswith((".jpg", ".jpeg", ".png")):
+            files.append(os.path.join(d, f))
+    return files
+
+
 def get_photo_path(card_id):
-    for ext in ("jpg", "jpeg", "png", "heic"):
-        path = os.path.join(PHOTO_DIR, f"{card_id}.{ext}")
-        if os.path.exists(path):
-            return path
-    return None
+    paths = get_photo_paths(card_id)
+    return paths[0] if paths else None
+
+
+def _next_photo_number(card_id):
+    d = os.path.join(PHOTO_DIR, str(card_id))
+    if not os.path.isdir(d):
+        return 1
+    nums = []
+    for f in os.listdir(d):
+        name = os.path.splitext(f)[0]
+        if name.isdigit():
+            nums.append(int(name))
+    return max(nums, default=0) + 1
 
 
 def save_photo(card_id, source_path):
+    d = _card_photo_dir(card_id)
+    n = _next_photo_number(card_id)
     ext = os.path.splitext(source_path)[1].lower()
     if ext in (".heic", ".heif"):
         img = Image.open(source_path)
-        dest = os.path.join(PHOTO_DIR, f"{card_id}.jpg")
+        dest = os.path.join(d, f"{n}.jpg")
         img.save(dest, "JPEG", quality=90)
     else:
-        dest = os.path.join(PHOTO_DIR, f"{card_id}{ext}")
+        dest = os.path.join(d, f"{n}{ext}")
         shutil.copy2(source_path, dest)
     return dest
 
 
 def save_photo_bytes(card_id, data, content_type="image/jpeg"):
+    d = _card_photo_dir(card_id)
+    n = _next_photo_number(card_id)
     ext = ".jpg"
     if "png" in content_type:
         ext = ".png"
-    dest = os.path.join(PHOTO_DIR, f"{card_id}{ext}")
+    dest = os.path.join(d, f"{n}{ext}")
     with open(dest, "wb") as f:
         f.write(data)
     return dest
@@ -992,26 +1037,25 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
   h1 { font-size: 20px; text-align: center; margin-bottom: 16px; color: #ffcb05; }
   .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
-  .card { background: #16213e; border-radius: 12px; padding: 14px; margin-bottom: 10px;
-          display: flex; align-items: center; justify-content: space-between; }
+  .card { background: #16213e; border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+  .card-top { display: flex; align-items: center; justify-content: space-between; }
   .card-info { flex: 1; }
   .card-name { font-weight: 600; font-size: 15px; }
   .card-set { color: #888; font-size: 13px; margin-top: 2px; }
   .card-id { color: #555; font-size: 12px; }
+  .photo-count { color: #4caf50; font-size: 12px; margin-top: 2px; }
   .has-photo { border-left: 3px solid #4caf50; }
   .no-photo { border-left: 3px solid #f44336; }
+  .btn-row { display: flex; gap: 8px; }
   .photo-btn { background: #ffcb05; color: #1a1a2e; border: none; border-radius: 8px;
                padding: 10px 16px; font-weight: 600; font-size: 14px; cursor: pointer; }
-  .photo-btn.done { background: #4caf50; color: white; }
-  .upload-form { display: none; }
-  .preview { max-width: 100%; max-height: 200px; border-radius: 8px; margin-top: 10px; }
-  .msg { text-align: center; padding: 20px; color: #4caf50; font-weight: 600; display: none; }
+  .photo-btn.add { background: #2196f3; color: white; }
   input[type=file] { display: none; }
 </style>
 </head>
 <body>
 <h1>Pokemon Photo Upload</h1>
-<p class="subtitle">Tap a card to take a photo</p>
+<p class="subtitle">Tap a card to add photos</p>
 <div id="cards">{{CARDS}}</div>
 <script>
 function upload(cardId, btn) {
@@ -1022,16 +1066,20 @@ function upload(cardId, btn) {
   input.onchange = async () => {
     const file = input.files[0];
     if (!file) return;
+    const orig = btn.textContent;
     btn.textContent = '...';
     const form = new FormData();
     form.append('photo', file);
     try {
       const resp = await fetch('/upload/' + cardId, { method: 'POST', body: form });
       if (resp.ok) {
-        btn.textContent = 'Done';
-        btn.classList.add('done');
-        btn.closest('.card').classList.remove('no-photo');
-        btn.closest('.card').classList.add('has-photo');
+        const data = await resp.json();
+        btn.textContent = orig;
+        const card = btn.closest('.card');
+        card.classList.remove('no-photo');
+        card.classList.add('has-photo');
+        const cnt = card.querySelector('.photo-count');
+        if (cnt) cnt.textContent = data.count + ' photo' + (data.count > 1 ? 's' : '');
       } else {
         btn.textContent = 'Error';
       }
@@ -1057,18 +1105,23 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
             for c in cards:
                 if c["status"] == "Sold":
                     continue
-                has = get_photo_path(c["id"]) is not None
-                cls = "has-photo" if has else "no-photo"
-                btn_cls = "photo-btn done" if has else "photo-btn"
-                btn_text = "Replace" if has else "Photo"
+                photos = get_photo_paths(c["id"])
+                count = len(photos)
+                cls = "has-photo" if count else "no-photo"
+                count_text = f'<div class="photo-count">{count} photo{"s" if count != 1 else ""}</div>' if count else ''
                 cards_html += (
                     f'<div class="card {cls}">'
+                    f'<div class="card-top">'
                     f'<div class="card-info">'
                     f'<div class="card-name">{c["name"]}</div>'
                     f'<div class="card-set">{c["set"]}</div>'
                     f'<div class="card-id">#{c["id"]:03d}</div>'
+                    f'{count_text}'
                     f'</div>'
-                    f'<button class="{btn_cls}" onclick="upload({c["id"]}, this)">{btn_text}</button>'
+                    f'<div class="btn-row">'
+                    f'<button class="photo-btn" onclick="upload({c["id"]}, this)">Add Photo</button>'
+                    f'</div>'
+                    f'</div>'
                     f'</div>'
                 )
             html = _HTML_TEMPLATE.replace("{{CARDS}}", cards_html)
@@ -1108,10 +1161,11 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
                         if b"image/png" in part[:header_end]:
                             ct = "image/png"
                         save_photo_bytes(card_id, file_data, ct)
+                        count = len(get_photo_paths(card_id))
                         self.send_response(200)
-                        self.send_header("Content-Type", "text/plain")
+                        self.send_header("Content-Type", "application/json")
                         self.end_headers()
-                        self.wfile.write(b"OK")
+                        self.wfile.write(json.dumps({"ok": True, "count": count}).encode())
                         return
 
             self.send_response(400)
@@ -1718,7 +1772,8 @@ class App:
                 tag = "collection"
                 status_display = "\U0001f7e2 Collection"
 
-            photo_icon = "\U0001f4f7" if get_photo_path(c["id"]) else ""
+            pcount = len(get_photo_paths(c["id"]))
+            photo_icon = f"\U0001f4f7{pcount}" if pcount else ""
 
             self.tree.insert("", "end", iid=str(c["id"]), values=(
                 c["id"], photo_icon, c["name"], c["set"], qty,
@@ -2124,9 +2179,9 @@ class App:
         card_id = int(item)
         col = self.tree.identify_column(event.x)
         if col == "#2":
-            photo_path = get_photo_path(card_id)
-            if photo_path:
-                self._show_photo_popup(card_id, photo_path)
+            photos = get_photo_paths(card_id)
+            if photos:
+                self._show_photo_popup(card_id, photos)
             return
         url = get_card_url(card_id)
         if url:
@@ -2138,25 +2193,46 @@ class App:
         card_id = self._get_selected_id()
         if card_id is None:
             return
-        photo_path = get_photo_path(card_id)
-        if not photo_path:
-            messagebox.showinfo("No Photo", f"No photo for card #{card_id}.")
+        photos = get_photo_paths(card_id)
+        if not photos:
+            messagebox.showinfo("No Photo", f"No photos for card #{card_id}.")
             return
-        self._show_photo_popup(card_id, photo_path)
+        self._show_photo_popup(card_id, photos)
 
-    def _show_photo_popup(self, card_id, photo_path):
-        img = Image.open(photo_path)
+    def _show_photo_popup(self, card_id, photo_paths):
         from PIL import ImageOps
-        img = ImageOps.exif_transpose(img)
-        max_w, max_h = 600, 700
-        img.thumbnail((max_w, max_h), Image.LANCZOS)
         win = tk.Toplevel(self.root)
-        win.title(f"Photo #{card_id:03d}")
-        win.resizable(False, False)
-        tk_img = ImageTk.PhotoImage(img)
-        label = ttk.Label(win, image=tk_img)
-        label.image = tk_img
-        label.pack(padx=5, pady=5)
+        win.title(f"Photos #{card_id:03d} ({len(photo_paths)})")
+        win.resizable(True, True)
+        idx = [0]
+        max_w, max_h = 600, 700
+
+        img_label = ttk.Label(win)
+        img_label.pack(padx=5, pady=5)
+
+        def show(i):
+            idx[0] = i % len(photo_paths)
+            img = Image.open(photo_paths[idx[0]])
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((max_w, max_h), Image.LANCZOS)
+            tk_img = ImageTk.PhotoImage(img)
+            img_label.configure(image=tk_img)
+            img_label.image = tk_img
+            counter.configure(text=f"{idx[0]+1} / {len(photo_paths)}")
+
+        if len(photo_paths) > 1:
+            nav = ttk.Frame(win)
+            nav.pack(pady=(0, 5))
+            ttk.Button(nav, text="◀", width=3, command=lambda: show(idx[0]-1)).pack(side="left", padx=5)
+            counter = ttk.Label(nav, text="")
+            counter.pack(side="left", padx=10)
+            ttk.Button(nav, text="▶", width=3, command=lambda: show(idx[0]+1)).pack(side="left", padx=5)
+            win.bind("<Left>", lambda e: show(idx[0]-1))
+            win.bind("<Right>", lambda e: show(idx[0]+1))
+        else:
+            counter = ttk.Label(win)
+
+        show(0)
         win.bind("<Escape>", lambda e: win.destroy())
         win.bind("<space>", lambda e: win.destroy())
 
@@ -2164,13 +2240,19 @@ class App:
         card_id = self._get_selected_id()
         if card_id is None:
             return
-        photo_path = get_photo_path(card_id)
-        if not photo_path:
-            messagebox.showinfo("No Photo", f"Card #{card_id} has no photo.")
+        photos = get_photo_paths(card_id)
+        if not photos:
+            messagebox.showinfo("No Photo", f"Card #{card_id} has no photos.")
             return
-        if messagebox.askyesno("Delete Photo", f"Delete photo for card #{card_id}?"):
-            os.remove(photo_path)
-            self.refresh_collection()
+        if len(photos) == 1:
+            if messagebox.askyesno("Delete Photo", f"Delete photo for card #{card_id}?"):
+                os.remove(photos[0])
+                self.refresh_collection()
+        else:
+            if messagebox.askyesno("Delete Photos", f"Delete all {len(photos)} photos for card #{card_id}?"):
+                for p in photos:
+                    os.remove(p)
+                self.refresh_collection()
 
     def on_add_photo(self):
         card_id = self._get_selected_id()
