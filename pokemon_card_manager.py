@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -2165,8 +2165,6 @@ class App:
 
         ttk.Label(auc_frame, text="Buy It Now (EUR):").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
         auc_bin_entry = ttk.Entry(auc_frame, width=15)
-        if card["price"]:
-            auc_bin_entry.insert(0, f"{card['price']:.2f}")
         auc_bin_entry.grid(row=2, column=1, sticky="w", pady=4)
         ttk.Label(auc_frame, text="(optional)", foreground="gray").grid(row=2, column=2, sticky="w", padx=5)
 
