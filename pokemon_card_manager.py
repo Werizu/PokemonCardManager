@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -1371,7 +1371,7 @@ class App:
         btn_frame = ttk.Frame(col_frame)
         btn_frame.pack(side="bottom", fill="x", pady=(8, 0))
         self._col_buttons = []
-        for text, cmd in [("Delete Photo", self.on_delete_photo), ("Edit Card", self.on_edit),
+        for text, cmd in [("Manage Photos", self.on_manage_photos), ("Edit Card", self.on_edit),
                           ("Mark Sold", self.on_mark_sold), ("List on eBay", self.on_ebay_list),
                           ("Send to Grading", self.on_send_grading), ("Grading Returned", self.on_grading_returned),
                           ("Delete Card", self.on_delete), ("Refresh", self.refresh_collection)]:
@@ -2236,23 +2236,81 @@ class App:
         win.bind("<Escape>", lambda e: win.destroy())
         win.bind("<space>", lambda e: win.destroy())
 
-    def on_delete_photo(self):
+    def on_manage_photos(self):
         card_id = self._get_selected_id()
         if card_id is None:
             return
         photos = get_photo_paths(card_id)
         if not photos:
-            messagebox.showinfo("No Photo", f"Card #{card_id} has no photos.")
+            messagebox.showinfo("No Photos", f"Card #{card_id} has no photos.")
             return
-        if len(photos) == 1:
-            if messagebox.askyesno("Delete Photo", f"Delete photo for card #{card_id}?"):
-                os.remove(photos[0])
+        self._show_manage_photos_window(card_id, photos)
+
+    def _show_manage_photos_window(self, card_id, photo_paths):
+        from PIL import ImageOps
+        win = tk.Toplevel(self.root)
+        win.title(f"Manage Photos — Card #{card_id:03d}")
+        win.resizable(True, True)
+        win.geometry("650x500")
+
+        header = ttk.Frame(win)
+        header.pack(fill="x", padx=10, pady=(10, 5))
+        ttk.Label(header, text=f"Photos for Card #{card_id:03d}", font=("", 12, "bold")).pack(side="left")
+        count_label = ttk.Label(header, text=f"{len(photo_paths)} photo(s)")
+        count_label.pack(side="right")
+
+        canvas = tk.Canvas(win)
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=5)
+
+        thumb_size = (150, 150)
+        tk_images = []
+
+        def delete_photo(path, row_frame):
+            basename = os.path.basename(path)
+            if not messagebox.askyesno("Delete Photo", f"Delete {basename}?", parent=win):
+                return
+            os.remove(path)
+            row_frame.destroy()
+            remaining = get_photo_paths(card_id)
+            count_label.configure(text=f"{len(remaining)} photo(s)")
+            if not remaining:
+                win.destroy()
                 self.refresh_collection()
-        else:
-            if messagebox.askyesno("Delete Photos", f"Delete all {len(photos)} photos for card #{card_id}?"):
-                for p in photos:
-                    os.remove(p)
+            else:
                 self.refresh_collection()
+
+        for i, photo_path in enumerate(photo_paths):
+            row = ttk.Frame(scroll_frame)
+            row.pack(fill="x", pady=5, padx=5)
+
+            try:
+                img = Image.open(photo_path)
+                img = ImageOps.exif_transpose(img)
+                img.thumbnail(thumb_size, Image.LANCZOS)
+                tk_img = ImageTk.PhotoImage(img)
+                tk_images.append(tk_img)
+                img_label = ttk.Label(row, image=tk_img)
+                img_label.pack(side="left", padx=(0, 10))
+            except Exception:
+                ttk.Label(row, text="[Error loading]").pack(side="left", padx=(0, 10))
+
+            info_frame = ttk.Frame(row)
+            info_frame.pack(side="left", fill="x", expand=True)
+            ttk.Label(info_frame, text=os.path.basename(photo_path)).pack(anchor="w")
+
+            del_btn = ttk.Button(row, text="Delete", command=lambda p=photo_path, r=row: delete_photo(p, r))
+            del_btn.pack(side="right", padx=5)
+
+        win._tk_images = tk_images
+        win.bind("<Escape>", lambda e: win.destroy())
 
     def on_add_photo(self):
         card_id = self._get_selected_id()
