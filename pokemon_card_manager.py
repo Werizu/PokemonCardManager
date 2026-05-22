@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -871,7 +871,7 @@ def ebay_create_draft(card_id, price, quantity, listing_format="FIXED_PRICE",
         "marketplaceId": mp,
         "format": listing_format,
         "listingDescription": description,
-        "availableQuantity": 1 if listing_format == "AUCTION" else quantity,
+        **({"availableQuantity": quantity} if listing_format != "AUCTION" else {}),
         "categoryId": "183454",
         "merchantLocationKey": loc_key,
         "pricingSummary": pricing,
