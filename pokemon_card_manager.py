@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -193,6 +193,11 @@ def parse_cardmarket_url(url):
 
         set_slug = "-".join(set_parts)
         product_name = " ".join(name_parts) if name_parts else " ".join(parts)
+
+        # Cardmarket-Slugs nutzen "Booster Box" (EN), die dt. Seite nennt
+        # dasselbe Produkt "Display" - Sammlerjargon, kein eigener Produkttyp.
+        if product_type == "Booster-Boxes" and product_name == "Booster Box":
+            product_name = "Display"
 
         return {
             "name": product_name,
