@@ -77,7 +77,7 @@ def create_workbook(path):
 
     ws_s.freeze_panes = "A2"
 
-    dv_plat = DataValidation(type="list", formula1='"Cardmarket,eBay"', allow_blank=True)
+    dv_plat = DataValidation(type="list", formula1='"Cardmarket,eBay,Trade"', allow_blank=True)
     dv_plat.sqref = "D2:D200"
     ws_s.add_data_validation(dv_plat)
 
@@ -110,7 +110,7 @@ def create_workbook(path):
         (6, "Raw", '=COUNTIF(Inventar!G2:G200,"Not Graded")'),
         (7, "Submitted for Grading", '=COUNTIF(Inventar!G2:G200,"Submitted")'),
         (8, "Graded", '=COUNTIF(Inventar!G2:G200,"Graded")'),
-        (10, "Total Invested", '=SUMPRODUCT((Inventar!K2:K200<>"")*1,Inventar!K2:K200)'),
+        (10, "Total Invested", '=SUMPRODUCT((Inventar!K2:K200<>"")*(Inventar!M2:M200<>"Trade"),Inventar!K2:K200)'),
     ]
     for row, label, formula in labels:
         ws_d.cell(row=row, column=2, value=label).font = label_font
@@ -123,9 +123,9 @@ def create_workbook(path):
 
     sales_labels = [
         (13, "Total Sales", '=COUNTA(Sales!A2:A200)'),
-        (14, "Total Net Revenue", '=SUMPRODUCT((Sales!H2:H200<>"")*1,Sales!H2:H200)'),
-        (15, "Total Net Profit", '=SUMPRODUCT((Sales!J2:J200<>"")*1,Sales!J2:J200)'),
-        (16, "Total Fees Paid", '=SUMPRODUCT((Sales!F2:F200<>"")*1,Sales!F2:F200)'),
+        (14, "Total Net Revenue", '=SUMPRODUCT((Sales!H2:H200<>"")*(Sales!D2:D200<>"Trade"),Sales!H2:H200)'),
+        (15, "Total Net Profit", '=SUMPRODUCT((Sales!J2:J200<>"")*(Sales!D2:D200<>"Trade"),Sales!J2:J200)'),
+        (16, "Total Fees Paid", '=SUMPRODUCT((Sales!F2:F200<>"")*(Sales!D2:D200<>"Trade"),Sales!F2:F200)'),
     ]
     for row, label, formula in sales_labels:
         ws_d.cell(row=row, column=2, value=label).font = label_font
