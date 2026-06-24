@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -429,6 +429,7 @@ def load_statistics():
         "at_grading": 0,
         "graded": 0,
         "total_spent": 0.0,
+        "total_sales_count": 0,
         "total_sale_revenue": 0.0,
         "total_fees": 0.0,
         "total_sale_profit": 0.0,
@@ -464,6 +465,7 @@ def load_statistics():
             continue
         if ws_sales.cell(row=row, column=4).value == "Trade":
             continue
+        stats["total_sales_count"] += 1
         sale_price = ws_sales.cell(row=row, column=5).value or 0
         fees = ws_sales.cell(row=row, column=6).value or 0
         shipping = ws_sales.cell(row=row, column=7).value or 0
@@ -1665,7 +1667,7 @@ class App:
             )
 
         sales_rows = [
-            ("Total Sales", str(s["sold"])),
+            ("Total Sales", str(s["total_sales_count"])),
             ("Gross Revenue", f"{s['total_sale_revenue']:.2f} EUR"),
             ("Total Fees & Shipping", f"{s['total_fees']:.2f} EUR"),
             ("", ""),
