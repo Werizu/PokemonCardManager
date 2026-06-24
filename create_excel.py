@@ -26,6 +26,8 @@ def create_workbook(path):
         ("Grading Status", 16), ("Grading Service", 15), ("Grade", 10),
         ("Cert Number", 15), ("Purchase Price", 16), ("Purchase Date", 14),
         ("Source", 13), ("Quantity", 10), ("Status", 14),
+        ("Grading Vormerkung", 16), ("Vormerkung Notiz", 22),
+        ("Vorheriger Service", 15), ("Vorheriger Grade", 14), ("Vorheriger Cert#", 15),
     ]
     for col, (name, width) in enumerate(inv_headers, 1):
         cell = ws.cell(row=1, column=col, value=name)
@@ -43,6 +45,7 @@ def create_workbook(path):
     dv_svc = DataValidation(type="list", formula1='"PSA,CGC,Beckett,ACE,TAG"', allow_blank=True)
     dv_src = DataValidation(type="list", formula1='"Cardmarket,eBay,Convention,Trade,Booster,Other"', allow_blank=True)
     dv_status = DataValidation(type="list", formula1='"Collection,For Sale,Sold"', allow_blank=True)
+    dv_vormerkung = DataValidation(type="list", formula1='"Ja"', allow_blank=True)
 
     dv_lang.sqref = "E2:E200"
     dv_cond.sqref = "F2:F200"
@@ -50,8 +53,9 @@ def create_workbook(path):
     dv_svc.sqref = "H2:H200"
     dv_src.sqref = "M2:M200"
     dv_status.sqref = "O2:O200"
+    dv_vormerkung.sqref = "P2:P200"
 
-    for dv in [dv_lang, dv_cond, dv_gs, dv_svc, dv_src, dv_status]:
+    for dv in [dv_lang, dv_cond, dv_gs, dv_svc, dv_src, dv_status, dv_vormerkung]:
         ws.add_data_validation(dv)
 
     # ── Sales sheet ──

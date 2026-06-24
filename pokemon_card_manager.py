@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.5.6"
+VERSION = "1.6.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -75,7 +75,8 @@ SOURCES = ["Cardmarket", "eBay", "Convention", "Trade", "Booster", "Other"]
 # Col mapping: 1=ID, 2=Name, 3=Set, 4=Code, 5=Lang, 6=Condition,
 # 7=Grading Status, 8=Grading Service, 9=Grade, 10=Cert#,
 # 11=Purchase Price, 12=Purchase Date, 13=Source,
-# 14=Quantity, 15=Status
+# 14=Quantity, 15=Status, 16=Grading Vormerkung, 17=Vormerkung Notiz,
+# 18=Vorheriger Service, 19=Vorheriger Grade, 20=Vorheriger Cert#
 
 GRADE_ALIASES = {
     "P10": "Pristine 10", "P 10": "Pristine 10",
@@ -296,6 +297,8 @@ def load_all_cards():
             "grading_status": ws.cell(row=row, column=7).value or "Not Graded",
             "grading_service": ws.cell(row=row, column=8).value or "",
             "grade": ws.cell(row=row, column=9).value or "",
+            "vormerkung": (ws.cell(row=row, column=16).value or "") == "Ja",
+            "vormerkung_notiz": ws.cell(row=row, column=17).value or "",
         })
     wb.close()
     return cards
@@ -372,8 +375,30 @@ def submit_for_grading(card_id, service):
     ws = wb["Inventar"]
     for row in range(2, 202):
         if ws.cell(row=row, column=1).value == card_id:
+            if ws.cell(row=row, column=7).value == "Graded":
+                ws.cell(row=row, column=18, value=ws.cell(row=row, column=8).value)
+                ws.cell(row=row, column=19, value=ws.cell(row=row, column=9).value)
+                ws.cell(row=row, column=20, value=ws.cell(row=row, column=10).value)
             ws.cell(row=row, column=7, value="Submitted")
             ws.cell(row=row, column=8, value=service)
+            ws.cell(row=row, column=16, value=None)
+            ws.cell(row=row, column=17, value=None)
+            break
+    wb.save(EXCEL_PATH)
+    wb.close()
+
+
+def toggle_grading_vormerkung(card_id, notiz=""):
+    wb = load_workbook(EXCEL_PATH)
+    ws = wb["Inventar"]
+    for row in range(2, 202):
+        if ws.cell(row=row, column=1).value == card_id:
+            if ws.cell(row=row, column=16).value == "Ja":
+                ws.cell(row=row, column=16, value=None)
+                ws.cell(row=row, column=17, value=None)
+            else:
+                ws.cell(row=row, column=16, value="Ja")
+                ws.cell(row=row, column=17, value=notiz)
             break
     wb.save(EXCEL_PATH)
     wb.close()
@@ -481,6 +506,9 @@ def load_card(card_id):
                 "price": ws.cell(row=row, column=11).value or 0,
                 "source": ws.cell(row=row, column=13).value or "",
                 "quantity": ws.cell(row=row, column=14).value or 1,
+                "grading_status": ws.cell(row=row, column=7).value or "Not Graded",
+                "vormerkung": (ws.cell(row=row, column=16).value or "") == "Ja",
+                "vormerkung_notiz": ws.cell(row=row, column=17).value or "",
             }
             wb.close()
             return card
@@ -493,7 +521,7 @@ def delete_card(card_id):
     ws = wb["Inventar"]
     for row in range(2, 202):
         if ws.cell(row=row, column=1).value == card_id:
-            for col in range(1, 16):
+            for col in range(1, 21):
                 ws.cell(row=row, column=col).value = None
             break
     ws_sales = wb["Sales"]
@@ -1380,7 +1408,7 @@ class App:
 
         saved_filter = config.get("filter", "All")
         self.filter_var = tk.StringVar(value=saved_filter)
-        for text in ["All", "Collection", "At Grading", "Sold"]:
+        for text in ["All", "Collection", "At Grading", "Grading-Queue", "Sold"]:
             ttk.Radiobutton(search_frame, text=text, variable=self.filter_var, value=text,
                             command=self.refresh_collection).pack(side="left", padx=3)
 
@@ -1399,6 +1427,7 @@ class App:
         self._col_buttons = []
         for text, cmd in [("Manage Photos", self.on_manage_photos), ("Edit Card", self.on_edit),
                           ("Mark Sold", self.on_mark_sold), ("List on eBay", self.on_ebay_list),
+                          ("Vormerken", self.on_toggle_grading_vormerkung),
                           ("Send to Grading", self.on_send_grading), ("Grading Returned", self.on_grading_returned),
                           ("Delete Card", self.on_delete), ("Refresh", self.refresh_collection)]:
             self._col_buttons.append(ttk.Button(btn_frame, text=text, command=cmd))
@@ -1778,6 +1807,8 @@ class App:
                 continue
             elif status_filter == "At Grading" and c["grading_status"] != "Submitted":
                 continue
+            elif status_filter == "Grading-Queue" and not c["vormerkung"]:
+                continue
 
             price_str = f"{c['price']:.2f} EUR" if c["price"] is not None else ""
             qty = int(c["quantity"])
@@ -1787,6 +1818,8 @@ class App:
                 if c["grade"]:
                     grading += f" {c['grade']}"
                 grading += ")"
+            if c["vormerkung"]:
+                grading += " \U0001f4cc"
 
             if c["status"] == "Sold":
                 tag = "sold"
@@ -1962,6 +1995,45 @@ class App:
             row=4, column=0, columnspan=2, pady=(10, 0)
         )
         sale_price_entry.focus()
+
+    def on_toggle_grading_vormerkung(self):
+        card_id = self._get_selected_id()
+        if card_id is None:
+            return
+
+        card = load_card(card_id)
+        if card is None:
+            return
+
+        if card["vormerkung"]:
+            toggle_grading_vormerkung(card_id)
+            self.refresh_collection()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Für Grading vormerken")
+        win.resizable(False, False)
+        win.grab_set()
+
+        frame = ttk.Frame(win, padding=15)
+        frame.pack()
+
+        typ = "Regrade" if card["grading_status"] == "Graded" else "Erstgrading"
+        ttk.Label(frame, text=f"Typ: {typ}").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        ttk.Label(frame, text="Notiz (optional):").grid(row=1, column=0, sticky="e", padx=(0, 10), pady=4)
+        notiz_entry = ttk.Entry(frame, width=30)
+        notiz_entry.grid(row=1, column=1, pady=4)
+
+        def confirm():
+            toggle_grading_vormerkung(card_id, notiz_entry.get().strip())
+            win.destroy()
+            self.refresh_collection()
+
+        ttk.Button(frame, text="Vormerken", command=confirm).grid(
+            row=2, column=0, columnspan=2, pady=(10, 0)
+        )
+        notiz_entry.focus()
 
     def on_send_grading(self):
         card_id = self._get_selected_id()
