@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -440,8 +440,10 @@ def load_statistics():
             continue
         quantity = ws_inv.cell(row=row, column=14).value or 1
         purchase = ws_inv.cell(row=row, column=11).value or 0
+        source = ws_inv.cell(row=row, column=13).value or ""
         stats["total_items"] += int(quantity)
-        stats["total_spent"] += float(purchase) * int(quantity)
+        if source != "Trade":
+            stats["total_spent"] += float(purchase) * int(quantity)
 
         status = ws_inv.cell(row=row, column=15).value or "Collection"
         grading_status = ws_inv.cell(row=row, column=7).value or "Not Graded"
@@ -459,6 +461,8 @@ def load_statistics():
 
     for row in range(2, 202):
         if ws_sales.cell(row=row, column=1).value is None:
+            continue
+        if ws_sales.cell(row=row, column=4).value == "Trade":
             continue
         sale_price = ws_sales.cell(row=row, column=5).value or 0
         fees = ws_sales.cell(row=row, column=6).value or 0
@@ -1967,7 +1971,7 @@ class App:
         sale_price_entry.grid(row=1, column=1, pady=4)
 
         ttk.Label(frame, text="Platform:").grid(row=2, column=0, sticky="e", padx=(0, 10), pady=4)
-        platform_cb = ttk.Combobox(frame, values=["Cardmarket", "eBay"], width=13, state="readonly")
+        platform_cb = ttk.Combobox(frame, values=["Cardmarket", "eBay", "Trade"], width=13, state="readonly")
         platform_cb.set("Cardmarket")
         platform_cb.grid(row=2, column=1, pady=4)
 
