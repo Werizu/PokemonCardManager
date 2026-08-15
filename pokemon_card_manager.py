@@ -24,7 +24,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from PIL import Image, ImageTk
 
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 BASE_DIR = os.path.join(os.path.expanduser("~"), "Pokemon-Sammlung")
@@ -33,13 +33,15 @@ KARTEN_DIR = os.path.join(BASE_DIR, "Karten")
 CONFIG_PATH = os.path.join(BASE_DIR, ".app_config.json")
 
 SETS = [
-    "151", "Ancient Origins", "Aquapolis", "Arceus", "Ascended Heroes",
+    "151", "30th Celebration", "Ancient Origins", "Aquapolis", "Arceus",
+    "Ascended Heroes",
     "Astral Radiance", "Base Set", "Base Set 2", "Battle Styles",
     "Black & White", "Black Bolt", "Boundaries Crossed", "BREAKpoint",
     "BREAKthrough", "Brilliant Stars", "Burning Shadows", "Call of Legends",
-    "Celebrations", "Celestial Storm", "Champion's Path", "Chilling Reign",
+    "Celebrations", "Celestial Storm", "Champion's Path", "Chaos Rising",
+    "Chilling Reign",
     "Cosmic Eclipse", "Crimson Invasion", "Crown Zenith", "Dark Explorers",
-    "Darkness Ablaze", "Destined Rivals", "Detective Pikachu",
+    "Darkness Ablaze", "Delta Reign", "Destined Rivals", "Detective Pikachu",
     "Diamond & Pearl", "Double Crisis", "Dragon Majesty", "Dragon Vault",
     "Dragons Exalted", "Emerging Powers", "Evolutions", "Evolving Skies",
     "EX Crystal Guardians", "EX Delta Species", "EX Deoxys", "EX Dragon",
@@ -52,17 +54,20 @@ SETS = [
     "Generations", "Great Encounters", "Guardians Rising", "Gym Challenge",
     "Gym Heroes", "HeartGold & SoulSilver", "Hidden Fates", "HS Triumphant",
     "HS Undaunted", "HS Unleashed", "Journey Together", "Jungle",
-    "Legendary Collection", "Legendary Treasures", "Legends Awakened",
+    "Kalos Starter Set", "Legendary Collection", "Legendary Treasures",
+    "Legends Awakened",
     "Lost Origin", "Lost Thunder", "Majestic Dawn", "Mega Evolution",
     "Mysterious Treasures", "Neo Destiny", "Neo Discovery", "Neo Genesis",
     "Neo Revelation", "Next Destinies", "Noble Victories", "Obsidian Flames",
-    "Other", "Perfect Order", "Paldea Evolved", "Paldean Fates",
-    "Paradox Rift", "Phantasmal Flames", "Phantom Forces", "Plasma Blast",
-    "Plasma Freeze", "Plasma Storm", "Platinum", "Pokemon GO", "Primal Clash",
+    "Other", "Paldea Evolved", "Paldean Fates", "Paradox Rift",
+    "Perfect Order", "Phantasmal Flames", "Phantom Forces", "Pitch Black",
+    "Plasma Blast", "Plasma Freeze", "Plasma Storm", "Platinum", "Pokemon GO",
+    "Primal Clash",
     "Prismatic Evolutions", "Promo", "Rebel Clash", "Rising Rivals",
     "Roaring Skies", "Scarlet & Violet", "Secret Wonders", "Shining Fates",
     "Shining Legends", "Shrouded Fable", "Silver Tempest", "Skyridge",
-    "Steam Siege", "Stellar Crown", "Stormfront", "Sun & Moon",
+    "Southern Islands", "Steam Siege", "Stellar Crown", "Stormfront",
+    "Sun & Moon",
     "Supreme Victors", "Surging Sparks", "Sword & Shield", "Team Rocket",
     "Team Up", "Temporal Forces", "Twilight Masquerade", "Ultra Prism",
     "Unbroken Bonds", "Unified Minds", "Vivid Voltage", "White Flare", "XY",
@@ -119,18 +124,35 @@ def parse_grade(grade_str):
     return float(grade_str)
 
 
+def _norm_words(text):
+    text = text.lower().replace("'", "").replace("’", "")
+    return [w for w in text.split() if w != "&"]
+
+
 def _match_set_name(slug):
     set_name = slug.replace("-", " ").replace(" and ", " & ")
+    slug_words = _norm_words(set_name)
+    slug_set = set(slug_words)
+
     best_set = None
-    best_score = 0
-    set_lower = set_name.lower()
+    best_rank = None
     for s in SETS:
-        if s.lower() == set_lower:
+        s_words = _norm_words(s)
+        if s_words == slug_words:
             return s
-        words_match = sum(1 for w in s.lower().split() if w in set_lower)
-        if words_match > best_score:
-            best_score = words_match
+        # Nur Sets akzeptieren, deren Name KOMPLETT im Slug steckt. Sonst
+        # gewinnt bei "Pitch-Black" schon ein einzelnes Wort und macht
+        # faelschlich "Black & White" daraus.
+        if not s_words or not all(w in slug_set for w in s_words):
+            continue
+        # Laengster/spezifischster Treffer gewinnt: "Base-Set-2" -> "Base Set 2",
+        # nicht "Base Set"; "XY-Evolutions" -> "Evolutions", nicht "XY".
+        rank = (len(s_words), sum(len(w) for w in s_words))
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
             best_set = s
+    # Unbekanntes Set (z.B. brandneue Erweiterung): lieber den Slug-Namen
+    # uebernehmen als es einem falschen Set zuzuordnen.
     return best_set or set_name
 
 
