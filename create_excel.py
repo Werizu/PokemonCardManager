@@ -65,7 +65,7 @@ def create_workbook(path):
         ("Platform", 13), ("Sale Price", 13), ("Fees", 12),
         ("Shipping Cost", 14), ("Net Revenue", 13),
         ("Purchase Price", 13), ("Net Profit", 12),
-        ("Buyer", 16), ("Tracking Number", 18),
+        ("Buyer", 16), ("Tracking Number", 18), ("Quantity", 10),
     ]
     for col, (name, width) in enumerate(sales_headers, 1):
         cell = ws_s.cell(row=1, column=col, value=name)
@@ -77,7 +77,7 @@ def create_workbook(path):
 
     ws_s.freeze_panes = "A2"
 
-    dv_plat = DataValidation(type="list", formula1='"Cardmarket,eBay,Trade"', allow_blank=True)
+    dv_plat = DataValidation(type="list", formula1='"Cardmarket,eBay,Whatnot,Trade,Other"', allow_blank=True)
     dv_plat.sqref = "D2:D200"
     ws_s.add_data_validation(dv_plat)
 

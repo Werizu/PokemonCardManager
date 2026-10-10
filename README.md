@@ -4,16 +4,19 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 
 ## Features
 
-- **Add cards** by pasting a Cardmarket URL (auto-fills name, set, card number) or manually
-- **Collection view** with filtering (All / Collection / For Sale / Sold / Grading)
-- **Grading tracker** — submit cards for grading and record results
-- **Partial selling** — sell part of your stock, track sales with profit calculation
-- **eBay integration** — create draft listings or publish directly from your inventory
-- **Photo upload** from your phone via local WiFi (built-in web server)
-- **Cardmarket links** — double-click a card to open its Cardmarket page
-- **Statistics** tab with investment totals, grading overview, and sales summary
-- **Auto-update** — check for new versions directly from the app
-- **Excel-based storage** — your data lives in a standard `.xlsx` file you can open anytime
+- **Gallery with real card images**: every card shows its official artwork (via the free [TCGdex](https://tcgdex.dev) API, in the card's language where available), so cards with the same name are easy to tell apart. Sealed products show the set logo. Wrong match? Right-click a card, **Kartenbild ändern**, and pick the right one.
+- **Market prices**: Cardmarket trend and 30-day average per card, refreshed daily; gallery, detail panel and statistics show value and gain/loss against the purchase price (raw cards only, slabs are excluded)
+- **Detail panel** for the selected card with all info, own photos and context actions (sell, eBay, grading, edit, delete)
+- **Gallery or list view**, search across name/set/number/ID, filters (Bestand, Zum Verkauf, Beim Grading, Vorgemerkt, Gegradet, Verkauft, Alle), sorting by date, name, set, price, market value or gain
+- **Add cards** by pasting a Cardmarket URL (also picked up automatically from the clipboard): name, set and number are filled in and the image preview appears with the current Cardmarket trend; all fields stay editable, so manual entry works too
+- **Grading board**: queued, submitted and graded cards side by side; submit all queued cards to one service at once
+- **Sales view** with all sales, profit per sale, totals and **undo** for mistaken entries
+- **Statistics**: stock, total invested, market value, unrealized and realized gain, purchases per month, value by set, most valuable cards
+- **Partial selling** with live profit preview; platforms Cardmarket, eBay, Whatnot, Trade, Other
+- **eBay integration**: create draft listings or publish directly (fixed price with Best Offer, or auction)
+- **Photo upload** from your phone via local WiFi (built-in web page with search and thumbnails)
+- **Keyboard shortcuts**: Cmd+1 to Cmd+6 switch sections, Cmd+N add, Cmd+F search, Cmd+R reload, arrow keys move through the gallery, Space shows the image large
+- **Auto-update** from GitHub, **Excel-based storage**: your data lives in a standard `.xlsx` file you can open anytime
 
 ## Requirements
 
@@ -46,24 +49,24 @@ Double-click **Poke Inv** on your Desktop, or run:
 
 ### Adding Cards
 
-1. Go to the **Add** tab
-2. Paste a Cardmarket URL — name, set, and card number fill automatically
-3. Select language, condition, source, and enter price/quantity
-4. Click **Save**
+1. Copy a Cardmarket URL and open **Hinzufügen** (Cmd+N); the link is taken from the clipboard automatically
+2. Name, set and number fill in, the card image and Cardmarket trend appear on the right
+3. Pick language, condition, source, enter price and quantity, press **Enter**
+4. Language, condition and source are remembered for the next card
 
 ### Photos
 
 When the app is running, it starts a local web server for phone uploads:
-1. Look at the bottom of the window for the upload URL (e.g. `http://192.168.1.x:8080`)
+1. The upload URL is shown at the bottom of the sidebar (e.g. `http://192.168.1.x:8080`); click it to copy
 2. Open that URL on your phone (same WiFi network)
 3. Select the card ID and upload a photo
 
 ### Selling Cards
 
-1. Select a card in the **Collection** tab
-2. Click **Mark Sold**
-3. Enter sale price, platform, fees, and quantity to sell
-4. The inventory quantity decreases; a sales record is created
+1. Select a card in **Sammlung**
+2. Click **Verkauf eintragen**
+3. Enter quantity, total sale price, platform, fees and your shipping cost; the profit is shown live
+4. The inventory quantity decreases and a sales record is created. Mistake? **Verkäufe**, select the sale, **Verkauf rückgängig**
 
 ## eBay Integration
 
@@ -107,8 +110,8 @@ The app can create listings on eBay directly from your inventory — either as A
 
 ### Creating Listings
 
-1. Select a card in the **Collection** tab
-2. Click **List on eBay**
+1. Select a card in **Sammlung**
+2. Click **Auf eBay listen** (the price is pre-filled with the Cardmarket trend)
 3. Set your price and quantity
 4. Choose:
    - **Save as Draft** — stores the offer in the eBay API for later publishing
@@ -121,7 +124,7 @@ The app automatically handles:
 
 ## Auto-Update
 
-Click **Check for Updates** in the Collection tab to check for a newer version on GitHub. If an update is available, the app downloads the latest code and restarts automatically.
+The app checks for updates on startup; you can also click **Nach Updates suchen** in **Einstellungen** to check for a newer version on GitHub. If an update is available, the app downloads the latest code and restarts automatically.
 
 Only the application code is updated — your data is never touched:
 
@@ -130,7 +133,8 @@ Only the application code is updated — your data is never touched:
 | `Pokemon-Inventar.xlsx` | `pokemon_card_manager.py` |
 | `Fotos/`, `Karten/` | |
 | `.ebay_config.json` | |
-| `.app_config.json`, `.card_urls.json` | |
+| `.app_config.json`, `.card_urls.json`, `.card_meta.json` | |
+| `.bilder/`, `.cache/` | |
 
 ## Data Storage
 
@@ -143,6 +147,9 @@ All data is stored locally in `~/Pokemon-Sammlung/`:
 | `Karten/` | Card data as JSON files |
 | `.card_urls.json` | Cardmarket URLs per card |
 | `.app_config.json` | Window size and preferences |
+| `.card_meta.json` | Matched TCGdex card per entry and cached market prices |
+| `.bilder/` | Downloaded official card images |
+| `.cache/` | Set lists and thumbnails (safe to delete) |
 | `.ebay_config.json` | eBay credentials and tokens (do not share) |
 
 ## License
