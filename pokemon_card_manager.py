@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 IS_MAC = sys.platform == "darwin"
@@ -5322,10 +5322,25 @@ def _activate_window():
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _set_dock_icon(root):
+    """The launcher execs Python, so the Dock would show the Python rocket; use the bundle icon."""
+    for app in ("/Applications/Poke Inv.app", os.path.expanduser("~/Desktop/Poke Inv.app")):
+        icns = os.path.join(app, "Contents", "Resources", "AppIcon.icns")
+        if os.path.exists(icns):
+            try:
+                with Image.open(icns) as im:
+                    root._dock_icon = ImageTk.PhotoImage(im.convert("RGBA"))
+                root.iconphoto(True, root._dock_icon)
+            except Exception:
+                pass
+            return
+
+
 if __name__ == "__main__":
     photo_server = start_photo_server()
 
     root = tk.Tk()
+    _set_dock_icon(root)
     app = App(root, photo_server)
     root.after(300, _activate_window)
     root.mainloop()
