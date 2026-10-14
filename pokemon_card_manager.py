@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 IS_MAC = sys.platform == "darwin"
@@ -2391,6 +2391,7 @@ class App:
             "settings": SettingsView(self.content, self),
         }
 
+        self._touch_target, self._touch_acc = None, 0
         root.bind_all("<MouseWheel>", self._on_wheel)
         root.bind_all("<Shift-MouseWheel>", lambda e: None)
         try:
@@ -2876,6 +2877,18 @@ class App:
         if dy >= 0x8000:
             dy -= 0x10000
         if not dy:
+            return
+        # Mit yscrollincrement rundet die Canvas jede Position auf dieses
+        # Raster; die wenigen Pixel pro Ereignis würden einfach verpuffen.
+        inc = int(float(target.cget("yscrollincrement")))
+        if inc > 0:
+            if target is not self._touch_target:
+                self._touch_target, self._touch_acc = target, 0
+            self._touch_acc -= dy
+            steps = int(self._touch_acc / inc)
+            if steps:
+                self._touch_acc -= steps * inc
+                target.yview_scroll(steps, "units")
             return
         try:
             x0, y0, x1, y1 = (float(v) for v in target.cget("scrollregion").split())
