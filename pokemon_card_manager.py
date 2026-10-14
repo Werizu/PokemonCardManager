@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 IS_MAC = sys.platform == "darwin"
@@ -2393,6 +2393,11 @@ class App:
 
         root.bind_all("<MouseWheel>", self._on_wheel)
         root.bind_all("<Shift-MouseWheel>", lambda e: None)
+        try:
+            # Ab Tk 8.7 meldet das Mac-Trackpad <TouchpadScroll> statt <MouseWheel>.
+            root.bind_all("<TouchpadScroll>", self._on_touchpad)
+        except tk.TclError:
+            pass
         for i, (key, _label) in enumerate(NAV, 1):
             root.bind_all(f"<{MOD}-Key-{i}>", lambda e, k=key: self.show(k))
         root.bind_all(f"<{MOD}-n>", lambda e: self.show("add"))
@@ -2835,26 +2840,49 @@ class App:
 
     # ---------- Fenster ----------
 
-    def _on_wheel(self, e):
+    def _wheel_target(self, e):
         try:
             w = self.root.winfo_containing(e.x_root, e.y_root)
         except (KeyError, tk.TclError):
-            return
+            return None
         while w is not None:
             if isinstance(w, (ttk.Treeview, tk.Listbox, tk.Text)):
-                return
+                return None
             target = getattr(w, "_scroll_target", None)
             if target is not None:
-                # Windows und Tk 9 liefern Vielfache von 120, Tk 8.6 auf dem
-                # Mac kleine Werte pro Schritt.
-                if abs(e.delta) >= 120:
-                    steps = -int(e.delta / 120) * 3
-                else:
-                    steps = -e.delta
-                if steps:
-                    target.yview_scroll(steps, "units")
-                return
+                return target
             w = getattr(w, "master", None)
+        return None
+
+    def _on_wheel(self, e):
+        target = self._wheel_target(e)
+        if target is None:
+            return
+        # Windows und Tk 9 liefern Vielfache von 120, Tk 8.6 auf dem
+        # Mac kleine Werte pro Schritt.
+        if abs(e.delta) >= 120:
+            steps = -int(e.delta / 120) * 3
+        else:
+            steps = -e.delta
+        if steps:
+            target.yview_scroll(steps, "units")
+
+    def _on_touchpad(self, e):
+        target = self._wheel_target(e)
+        if target is None:
+            return
+        # delta packt dx (obere 16 Bit) und dy (untere 16 Bit) in Pixeln.
+        dy = e.delta & 0xFFFF
+        if dy >= 0x8000:
+            dy -= 0x10000
+        if not dy:
+            return
+        try:
+            x0, y0, x1, y1 = (float(v) for v in target.cget("scrollregion").split())
+        except ValueError:
+            return
+        if y1 - y0 > 0:
+            target.yview_moveto(target.yview()[0] - dy / (y1 - y0))
 
     def _save_state(self):
         cfg = _load_config()
