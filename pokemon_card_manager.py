@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -724,7 +724,7 @@ def _save_config(config):
 # ============================================================
 
 PHOTO_DIR = os.path.join(BASE_DIR, "Fotos")
-for _d in (PHOTO_DIR, CACHE_DIR, IMG_DIR):
+for _d in (PHOTO_DIR, CACHE_DIR):
     os.makedirs(_d, exist_ok=True)
 
 URLS_PATH = os.path.join(BASE_DIR, ".card_urls.json")
@@ -1497,38 +1497,6 @@ def _result(match):
     return {"status": "ok" if match.get("image") else "noimage", "match": match}
 
 
-def _image_urls(match, language, size="high"):
-    base = match["image"]
-    if match.get("kind") == "logo":
-        return [base + ".png"]
-    urls = []
-    lang = TCG_LANG.get(language or "EN", "en")
-    if lang != "en" and "/en/" in base:
-        urls.append(base.replace("/en/", f"/{lang}/", 1) + f"/{size}.{_IMG_EXT}")
-    urls.append(base + f"/{size}.{_IMG_EXT}")
-    return urls
-
-
-def download_card_image(card_id, match, language):
-    """Laedt das Bild (wenn moeglich in Kartensprache) nach .bilder/."""
-    last_err = None
-    for url in _image_urls(match, language):
-        try:
-            data = _http_get(url)
-            ext = url.rsplit(".", 1)[-1]
-            fname = f"{card_id}.{ext}"
-            for old in os.listdir(IMG_DIR):
-                if old.split(".")[0] == str(card_id):
-                    os.remove(os.path.join(IMG_DIR, old))
-            with open(os.path.join(IMG_DIR, fname), "wb") as f:
-                f.write(data)
-            lang_used = "en" if "/en/" in url else url.split("/")[3]
-            return {"file": fname, "lang": lang_used}
-        except Exception as e:
-            last_err = e
-    raise last_err or Exception("no image")
-
-
 def download_preview(match, size="low"):
     """Kleines Vorschaubild fuer Auswahl-Dialoge (gecacht)."""
     key = re.sub(r"[^A-Za-z0-9.\-]", "_", match["id"])
@@ -1566,12 +1534,7 @@ def market_price(meta, card_id):
 
 
 def card_image_path(meta, card_id):
-    """(Pfad, Art) des Titelbilds: offizielles Bild > eigenes Foto > nichts."""
-    m = meta.get(str(card_id)) or {}
-    if m.get("file") and m.get("status") != "hidden":
-        p = os.path.join(IMG_DIR, m["file"])
-        if os.path.exists(p):
-            return p, m.get("kind", "card")
+    """(Pfad, Art) des Titelbilds: nur eigene Fotos, offizielle Kartenbilder gibt es nicht mehr."""
     photos = get_photo_paths(card_id)
     if photos:
         return photos[0], "photo"
@@ -2754,11 +2717,11 @@ class App:
         self.root.after(500, self._upload_tick)
 
     def _activity_tick(self):
-        n_img = self.worker.busy("resolve:") + self.worker.busy("img:")
+        n_img = self.worker.busy("resolve:")
         n_price = self.worker.busy("price:")
         parts = []
         if n_img:
-            parts.append(f"Bilder: {n_img} offen")
+            parts.append(f"Zuordnung: {n_img} offen")
         if n_price:
             parts.append(f"Preise: {n_price} offen")
         self.activity.config(text=" · ".join(parts))
@@ -2895,10 +2858,9 @@ class App:
             m = self.meta.get(k, {})
             if m.get("status") == "hidden":
                 continue
-            if m.get("file") and os.path.exists(os.path.join(IMG_DIR, m["file"])):
-                continue
-            if m.get("match") and m["match"].get("image"):
-                self._download(c["id"], m["match"], c["language"])
+            if m.get("match"):
+                if m["match"].get("kind") == "card" and not m.get("price"):
+                    self._fetch_price(c["id"], m["match"]["id"])
                 continue
             if m.get("status") == "noimage" and not force:
                 continue
@@ -2914,39 +2876,25 @@ class App:
         m = self.meta.setdefault(str(card_id), {})
         m["checked"] = _time.time()
         m["status"] = res["status"]
-        if res["status"] == "ok":
+        if res["status"] in ("ok", "noimage"):
             m["match"] = _slim_match(res["match"])
-            c = self.by_id.get(card_id)
-            self._download(card_id, m["match"], c["language"] if c else "EN")
-        elif res["status"] == "noimage":
-            m["match"] = _slim_match(res["match"])
-            self._fetch_price(card_id, m["match"]["id"])
+            if m["match"].get("kind") == "card":
+                self._fetch_price(card_id, m["match"]["id"])
             self.card_image_changed(card_id)
         else:
             m["candidates"] = len(res.get("candidates", []))
         self.save_meta_later()
 
-    def _download(self, card_id, match, language):
-        def done(res, err):
-            if err or not res:
-                return
-            m = self.meta.setdefault(str(card_id), {})
-            m.update(file=res["file"], lang=res["lang"], kind=match.get("kind", "card"))
-            self.save_meta_later()
-            self.card_image_changed(card_id)
-            if match.get("kind") == "card":
-                self._fetch_price(card_id, match["id"])
-        self.worker.submit(f"img:{card_id}", download_card_image, (card_id, match, language), done)
-
     def set_card_match(self, card_id, match, manual=True):
-        """Bild fuer eine Karte festlegen (aus Auswahl-Dialog oder beim Anlegen)."""
+        """TCGdex-Karte zuordnen (fuer den Marktpreis), aus Auswahl-Dialog oder beim Anlegen."""
         m = self.meta.setdefault(str(card_id), {})
         m.pop("file", None)
         m.pop("price", None)
         m.update(status="manual" if manual else "ok", match=_slim_match(match), checked=_time.time())
-        c = self.by_id.get(card_id)
-        self._download(card_id, m["match"], c["language"] if c else "EN")
+        if m["match"].get("kind") == "card":
+            self._fetch_price(card_id, m["match"]["id"])
         self.save_meta_later()
+        self.card_image_changed(card_id)
 
     def hide_card_image(self, card_id):
         m = self.meta.setdefault(str(card_id), {})
@@ -3064,15 +3012,9 @@ class App:
         c = self.by_id.get(card_id)
         if not c:
             return
-        items = []
-        m = self.meta.get(str(card_id), {})
-        if m.get("file") and m.get("status") != "hidden":
-            p = os.path.join(IMG_DIR, m["file"])
-            if os.path.exists(p):
-                items.append((p, "official"))
-        items += [(p, "photo") for p in get_photo_paths(card_id)]
+        items = [(p, "photo") for p in get_photo_paths(card_id)]
         if not items:
-            self.toast.show("Noch kein Bild vorhanden", "info")
+            self.toast.show("Noch kein Foto vorhanden", "info")
             return
         Viewer(self, c, items, start)
 
@@ -3083,7 +3025,7 @@ class App:
 
     def _picked(self, card_id, match):
         self.set_card_match(card_id, match)
-        self.toast.show("Bild wird geladen …", "info")
+        self.toast.show("Karte zugeordnet, Marktpreis wird geladen …", "info")
 
     def delete(self, card_id):
         c = self.by_id[card_id]
@@ -3102,7 +3044,7 @@ class App:
             return
         menu = tk.Menu(self.root, tearoff=0)
         sold = c["status"] == "Sold"
-        menu.add_command(label="Bilder ansehen", command=lambda: self.view_images(card_id))
+        menu.add_command(label="Fotos ansehen", command=lambda: self.view_images(card_id))
         menu.add_command(label="Auf Cardmarket öffnen", command=lambda: self.open_cardmarket(card_id))
         menu.add_separator()
         if not sold:
@@ -3121,7 +3063,7 @@ class App:
                 menu.add_command(label="Zum Grading einreichen …", command=lambda: self.submit_grading([card_id]))
             menu.add_separator()
         menu.add_command(label="Fotos hinzufügen …", command=lambda: self.add_photos(card_id))
-        menu.add_command(label="Kartenbild ändern …", command=lambda: self.pick_image(card_id))
+        menu.add_command(label="Für Marktpreis zuordnen …", command=lambda: self.pick_image(card_id))
         menu.add_command(label="Bearbeiten …", command=lambda: self.edit(card_id))
         menu.add_separator()
         menu.add_command(label="Löschen …", command=lambda: self.delete(card_id))
@@ -3425,15 +3367,7 @@ class Gallery(tk.Frame):
         cv.create_line(cx - 22, cy, cx + 22, cy, fill=SURFACE4, width=3, tags=(t, f"ph{cid}"))
         cv.create_oval(cx - 7, cy - 7, cx + 7, cy + 7, fill=SURFACE3, outline=SURFACE4, width=3,
                        tags=(t, f"ph{cid}"))
-        m = self.app.meta.get(str(cid), {})
-        if m.get("status") == "noimage":
-            hint = "Kein offizielles Bild.\nEigenes Foto hinzufügen"
-        elif m.get("status") in ("multi", "none"):
-            hint = "Bild wählen:\nRechtsklick"
-        elif self.app.worker.busy(f"resolve:{cid}") or self.app.worker.busy(f"img:{cid}"):
-            hint = "Bild wird gesucht …"
-        else:
-            hint = ""
+        hint = "Noch kein Foto"
         if hint:
             cv.create_text(cx, cy + 46, text=hint, fill=FAINT, font=F["xs"], justify="center",
                            tags=(t, f"ph{cid}"))
@@ -3705,20 +3639,14 @@ class DetailPanel(tk.Frame):
             if img:
                 lbl.config(image=img)
         else:
-            m = self.app.meta.get(str(cid), {})
-            txt = {"noimage": "TCGdex hat für diese Karte kein Bild.\nKlick: anderes Bild wählen",
-                   "none": "Kein Bild gefunden.\nKlick: Bild wählen",
-                   "multi": "Mehrere Karten passen.\nKlick: richtiges Bild wählen",
-                   "hidden": "Kein Bild.\nKlick: Bild wählen"}.get(m.get("status"), "Bild wird gesucht …")
-            lbl.config(text=txt, fg=MUTED, font=F["sm"], bg=SURFACE2)
-            lbl.bind("<Button-1>", lambda e: self.app.pick_image(cid))
+            lbl.config(text="Noch kein Foto.\nKlick: Foto hinzufügen\noder per Handy hochladen",
+                       fg=MUTED, font=F["sm"], bg=SURFACE2)
+            lbl.bind("<Button-1>", lambda e: self.app.add_photos(cid))
 
         links = tk.Frame(p, bg=SURFACE)
         links.pack(pady=(10, 0))
-        Btn(links, "Bild ändern", lambda: self.app.pick_image(cid), kind="ghost", small=True,
-            bg=SURFACE).pack(side="left")
         Btn(links, "Cardmarket ↗", lambda: self.app.open_cardmarket(cid), kind="ghost", small=True,
-            bg=SURFACE).pack(side="left", padx=(4, 0))
+            bg=SURFACE).pack(side="left")
         Btn(links, "+ Foto", lambda: self.app.add_photos(cid), kind="ghost", small=True,
             bg=SURFACE).pack(side="left", padx=(4, 0))
 
@@ -3730,7 +3658,6 @@ class DetailPanel(tk.Frame):
                      font=F["xs_b"]).pack(anchor="w", pady=(0, 6))
             row = tk.Frame(strip, bg=SURFACE)
             row.pack(anchor="w")
-            has_official = bool(self.app.meta.get(str(cid), {}).get("file"))
             for i, ph in enumerate(photos[:5]):
                 t = tk.Label(row, bg=SURFACE2, image=self.app.thumbs.blank(52, 52), cursor="hand2")
                 t.pack(side="left", padx=(0, 6))
@@ -3738,7 +3665,7 @@ class DetailPanel(tk.Frame):
                                          on_ready=lambda im, l=t: l.winfo_exists() and l.config(image=im))
                 if im:
                     t.config(image=im)
-                t.bind("<Button-1>", lambda e, i=i: self.app.view_images(cid, i + (1 if has_official else 0)))
+                t.bind("<Button-1>", lambda e, i=i: self.app.view_images(cid, i))
             if len(photos) > 5:
                 tk.Label(row, text=f"+{len(photos) - 5}", bg=SURFACE, fg=MUTED, font=F["sm_b"]).pack(side="left")
 
@@ -4760,7 +4687,7 @@ class StatsView(View):
         tk.Label(panel, text="Wertvollste Karten (Marktwert, ungegradet)", bg=SURFACE, fg=TEXT, font=F["md_b"]).pack(
             anchor="w", padx=18, pady=(16, 10))
         if not top:
-            tk.Label(panel, text="Noch keine Marktpreise geladen. Sie kommen automatisch, sobald Kartenbilder gefunden sind.",
+            tk.Label(panel, text="Noch keine Marktpreise geladen. Sie kommen automatisch, sobald die Karten bei TCGdex zugeordnet sind.",
                      bg=SURFACE, fg=FAINT, font=F["sm"]).pack(anchor="w", padx=18, pady=(0, 18))
         row = tk.Frame(panel, bg=SURFACE)
         row.pack(fill="x", padx=18, pady=(0, 18))
@@ -4904,9 +4831,9 @@ class SettingsView(View):
         self.ship_status.pack(anchor="w", pady=(10, 0))
 
         # Bilder & Preise
-        imgs = self._card(grid, 1, 0, "Kartenbilder & Marktpreise",
-                          "Bilder und Cardmarket-Preise kommen kostenlos von TCGdex. Passt ein Bild nicht: "
-                          "Karte rechtsklicken, „Kartenbild ändern“.")
+        imgs = self._card(grid, 1, 0, "Marktpreise",
+                          "Cardmarket-Preise kommen kostenlos von TCGdex. Passt ein Preis nicht: "
+                          "Karte rechtsklicken, „Für Marktpreis zuordnen“.")
         self.img_stats = tk.Label(imgs, text="", bg=SURFACE, fg=TEXT, font=F["sm"], justify="left")
         self.img_stats.pack(anchor="w", pady=(4, 10))
         self.auto_prices = tk.BooleanVar(value=app.config.get("auto_prices", True))
@@ -4917,7 +4844,7 @@ class SettingsView(View):
         cb.pack(anchor="w")
         brow = tk.Frame(imgs, bg=SURFACE)
         brow.pack(fill="x", pady=(14, 0))
-        Btn(brow, "Fehlende Bilder suchen", self._find_images, kind="subtle", bg=SURFACE).pack(side="left")
+        Btn(brow, "Fehlende Zuordnungen suchen", self._find_images, kind="subtle", bg=SURFACE).pack(side="left")
         Btn(brow, "Preise jetzt laden", self._load_prices, kind="subtle", bg=SURFACE).pack(side="left", padx=(8, 0))
 
         # Daten & App
@@ -4956,7 +4883,7 @@ class SettingsView(View):
         prices = [self.app.price_info(c["id"]).get("updated") for c in stock]
         prices = [p for p in prices if p]
         stand = datetime.fromtimestamp(max(prices)).strftime("%d.%m.%Y %H:%M") if prices else "noch nie"
-        self.img_stats.config(text=f"{with_img} von {len(stock)} Karten im Bestand haben ein Bild\n"
+        self.img_stats.config(text=f"{with_img} von {len(stock)} Karten im Bestand haben ein Foto\n"
                                    f"{len(prices)} mit Marktpreis · letzter Abruf {stand}")
 
     def _set_ebay_status(self, text, color):
@@ -5038,14 +4965,14 @@ class SettingsView(View):
         self.app.config["auto_prices"] = self.auto_prices.get()
 
     def _find_images(self):
-        missing = [c for c in self.app.cards if not self.app.image_for(c["id"])[0]
+        missing = [c for c in self.app.cards if not self.app.meta.get(str(c["id"]), {}).get("match")
                    and self.app.meta.get(str(c["id"]), {}).get("status") != "hidden"]
         for c in missing:
             m = self.app.meta.get(str(c["id"]))
             if m and m.get("status") in ("none", "multi"):
                 m["checked"] = 0
         self.app.ensure_images(missing, force=True)
-        self.app.toast.show(f"Suche Bilder für {len(missing)} Karten …" if missing else "Alle Karten haben ein Bild",
+        self.app.toast.show(f"Ordne {len(missing)} Karten zu …" if missing else "Alle Karten sind zugeordnet",
                             "info")
 
     def _load_prices(self):
@@ -5442,8 +5369,8 @@ class ImagePicker(Dialog):
     TW, TH = 120, 167
 
     def __init__(self, app, name, set_name="", candidates=None, on_pick=None, on_none=None):
-        super().__init__(app, "Kartenbild wählen",
-                         "Gleichnamige Karten gibt es oft in vielen Sets. Das passende Bild anklicken.",
+        super().__init__(app, "Karte zuordnen",
+                         "Für den Marktpreis die passende Karte anklicken. Gleichnamige Karten gibt es oft in vielen Sets.",
                          width=820)
         self.resizable(True, True)
         self.on_pick = on_pick
@@ -5467,7 +5394,7 @@ class ImagePicker(Dialog):
         self.grid_sf.canvas.configure(width=780, height=470)
         self.results = list(candidates or [])
         if on_none:
-            self.button("Kein offizielles Bild", lambda: (self.close(), on_none()), "subtle")
+            self.button("Nicht zuordnen", lambda: (self.close(), on_none()), "subtle")
         self.button("Abbrechen", self.close)
         self.unbind("<Return>")
         self.show(self.query)
@@ -5557,7 +5484,7 @@ def tcg_sets_safe():
 
 
 class Viewer(tk.Toplevel):
-    """Bilder gross ansehen: offizielles Bild + eigene Fotos, Pfeiltasten blaettern."""
+    """Eigene Fotos gross ansehen, Pfeiltasten blaettern."""
 
     def __init__(self, app, c, items, start=0):
         super().__init__(app.root, bg=SIDEBAR)
@@ -5601,7 +5528,7 @@ class Viewer(tk.Toplevel):
         except Exception:
             self.img_lbl.config(image="", text="Bild kann nicht geladen werden", fg=MUTED, font=F["body"],
                                 width=40, height=10)
-        label = "Offizielles Kartenbild" if kind == "official" else "Eigenes Foto"
+        label = "Eigenes Foto"
         self.caption.config(text=f"{label}  ·  {self.idx + 1} / {len(self.items)}")
         multi = len(self.items) > 1
         self.prev_b.set_enabled(multi)
