@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -1860,6 +1860,9 @@ function upload(cardId, btn) {
         const cnt = btn.closest('.card').querySelector('.count');
         cnt.textContent = data.count + (data.count > 1 ? ' Fotos' : ' Foto');
         cnt.classList.add('ok');
+        const img = btn.closest('.card').querySelector('.thumb');
+        img.style.visibility = '';
+        img.src = '/img/' + cardId + '?t=' + Date.now();
       } else {
         btn.textContent = 'Fehler';
       }
@@ -1881,6 +1884,8 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
     def _send(self, code, body=b"", ctype="text/plain"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        # Fotos ändern sich laufend, das Handy soll nie eine alte Fassung zeigen.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1899,7 +1904,8 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
                 count_txt = f"{count} Foto{'s' if count != 1 else ''}" if count else "noch kein Foto"
                 rows.append(
                     f'<div class="card" data-s="{search}">'
-                    f'<img class="thumb" loading="lazy" src="/img/{c["id"]}" alt="">'
+                    f'<img class="thumb" loading="lazy" src="/img/{c["id"]}" alt="" '
+                    f'onerror="this.style.visibility=\'hidden\'">'
                     f'<div class="info"><div class="name">{e(c["name"])}</div>'
                     f'<div class="meta">#{c["id"]:03d} · {e(c["set"])}{nr}</div>'
                     f'<div class="count{" ok" if count else ""}">{count_txt}</div></div>'
@@ -1908,7 +1914,7 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
             page = _HTML_TEMPLATE.replace("{{CARDS}}", "".join(rows))
             self._send(200, page.encode(), "text/html; charset=utf-8")
         elif self.path.startswith("/img/"):
-            card_id = _to_int(self.path.split("/")[-1])
+            card_id = _to_int(self.path.split("?")[0].split("/")[-1])
             path, _kind = card_image_path(_load_json(META_PATH), card_id) if card_id else (None, None)
             if not path:
                 self._send(404)
