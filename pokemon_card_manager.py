@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -976,6 +976,34 @@ def _ebay_fetch_policies():
         except Exception:
             pass
     _save_ebay_config(cfg)
+    try:
+        _ebay_no_return_policy()
+    except Exception:
+        pass
+
+
+def _ebay_no_return_policy():
+    """ID einer Rücknahme-Richtlinie ohne Rücknahme; Marlon verkauft immer ohne Rücknahme.
+    Nimmt eine vorhandene aus dem eBay-Konto, legt sonst „Keine Rücknahme“ an."""
+    cfg = _load_ebay_config()
+    if cfg.get("return_policy_no_returns") == _ebay_base(cfg) and cfg.get("return_policy_id"):
+        return cfg["return_policy_id"]
+    mp = cfg.get("marketplace", "EBAY_DE")
+    result = _ebay_api("GET", f"/sell/account/v1/return_policy?marketplace_id={mp}")
+    pid = next((p["returnPolicyId"] for p in result.get("returnPolicies", [])
+                if not p.get("returnsAccepted")), None)
+    if not pid:
+        created = _ebay_api("POST", "/sell/account/v1/return_policy", {
+            "name": "Keine Rücknahme", "marketplaceId": mp,
+            "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+            "returnsAccepted": False,
+        })
+        pid = created["returnPolicyId"]
+    cfg = _load_ebay_config()
+    cfg["return_policy_id"] = pid
+    cfg["return_policy_no_returns"] = _ebay_base(cfg)  # gilt nur für diese Umgebung (Sandbox/Prod)
+    _save_ebay_config(cfg)
+    return pid
 
 
 def _ebay_update_shipping(de_cost, eu_cost, intl_cost, handling_days=2):
@@ -1141,10 +1169,11 @@ def ebay_create_draft(card_id, price, quantity, listing_format="FIXED_PRICE",
         offer["listingDuration"] = auction_duration
     if listing_format != "AUCTION":
         offer["listingPolicies"]["bestOfferTerms"] = {"bestOfferEnabled": True}
-    for kind in ("fulfillment", "payment", "return"):
+    for kind in ("fulfillment", "payment"):
         pid = cfg.get(f"{kind}_policy_id")
         if pid:
             offer["listingPolicies"][f"{kind}PolicyId"] = pid
+    offer["listingPolicies"]["returnPolicyId"] = _ebay_no_return_policy()
 
     existing_offer_id = None
     try:
