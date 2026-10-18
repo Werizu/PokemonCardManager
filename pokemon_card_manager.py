@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 IS_MAC = sys.platform == "darwin"
@@ -5531,11 +5531,14 @@ class Viewer(tk.Toplevel):
         self.title(_card_title(c))
         self.transient(app.root)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.max_w, self.max_h = min(760, sw - 120), min(900, sh - 200)
+        # Platz für Menüleiste, Titelleiste, Dock und die Knopfleiste lassen,
+        # sonst schneidet macOS das Fenster unten ab und die Knöpfe fehlen.
+        self.max_w, self.max_h = min(760, sw - 120), min(900, sh - 320)
+        # Knopfleiste zuerst packen, damit sie bei Platzmangel nicht verdrängt wird.
+        bar = tk.Frame(self, bg=SIDEBAR)
+        bar.pack(side="bottom", fill="x", padx=24, pady=(0, 18))
         self.img_lbl = tk.Label(self, bg=SIDEBAR)
         self.img_lbl.pack(padx=24, pady=(20, 10))
-        bar = tk.Frame(self, bg=SIDEBAR)
-        bar.pack(fill="x", padx=24, pady=(0, 18))
         self.prev_b = Btn(bar, "◀", lambda: self.go(-1), kind="secondary", bg=SIDEBAR)
         self.prev_b.pack(side="left")
         self.caption = tk.Label(bar, text="", bg=SIDEBAR, fg=MUTED, font=F["sm"])
