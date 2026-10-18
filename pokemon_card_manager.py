@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -1824,6 +1824,8 @@ UPLOAD_PORT = 8080
 
 # Sortierung der Sammlung in der App; die Handy-Seite übernimmt sie live.
 upload_sort = "new"
+# Karten-IDs frisch hochgeladener Handy-Fotos; die App holt sie im Tk-Thread ab.
+upload_events = queue.Queue()
 
 
 def sort_cards(cards, sort, meta):
@@ -1986,6 +1988,7 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
                         if b"image/png" in part[:header_end]:
                             ct = "image/png"
                         save_photo_bytes(card_id, file_data, ct)
+                        upload_events.put(card_id)
                         count = len(get_photo_paths(card_id))
                         self._send(200, json.dumps({"ok": True, "count": count}).encode(),
                                    "application/json")
@@ -2732,6 +2735,23 @@ class App:
         self.activity = tk.Label(sb, text="", bg=SIDEBAR, fg=FAINT, font=F["xs"], anchor="w")
         self.activity.pack(side="bottom", fill="x", padx=18)
         self._activity_tick()
+        self._upload_tick()
+
+    def _upload_tick(self):
+        ids = []
+        while True:
+            try:
+                ids.append(upload_events.get_nowait())
+            except queue.Empty:
+                break
+        for cid in dict.fromkeys(ids):
+            self.card_image_changed(cid)
+        if ids:
+            c = self.by_id.get(ids[-1])
+            name = c["name"] if c and c["name"] else f"#{ids[-1]:03d}"
+            self.toast.show(f"Foto vom Handy: {name}" if len(ids) == 1
+                            else f"{len(ids)} Fotos vom Handy", "ok")
+        self.root.after(500, self._upload_tick)
 
     def _activity_tick(self):
         n_img = self.worker.busy("resolve:") + self.worker.busy("img:")
