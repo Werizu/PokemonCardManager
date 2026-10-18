@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 
 IS_MAC = sys.platform == "darwin"
@@ -1821,6 +1821,21 @@ def qr_image(text, px=150, border=3, dark="#0f1115", light="#ffffff"):
 
 UPLOAD_PORT = 8080
 
+# Sortierung der Sammlung in der App; die Handy-Seite übernimmt sie live.
+upload_sort = "new"
+
+
+def sort_cards(cards, sort, meta):
+    keys = {
+        "new": (lambda c: -c["id"]), "old": (lambda c: c["id"]),
+        "name": (lambda c: (c["name"].lower(), c["id"])),
+        "set": (lambda c: (c["set"].lower(), _split_code(c["number"]) or ("", 0), c["id"])),
+        "price": (lambda c: -c["price"]),
+        "market": (lambda c: -(market_price(meta, c["id"]) or -1)),
+        "delta": (lambda c: -((market_price(meta, c["id"]) or c["price"]) - c["price"])),
+    }
+    return sorted(cards, key=keys.get(sort, keys["new"]))
+
 _HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="de">
 <head>
@@ -1849,7 +1864,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <h1>Foto-Upload</h1>
-<p class="sub">Karte antippen, Foto aufnehmen. Ohne Foto zuerst.</p>
+<p class="sub">Karte antippen, Foto aufnehmen. Sortiert wie in der App.</p>
 <input id="q" type="search" placeholder="Suchen: Name, Set, Nummer" oninput="filter()">
 <div id="cards">{{CARDS}}</div>
 <script>
@@ -1908,7 +1923,7 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
         if self.path in ("/", ""):
             cards = [c for c in load_all_cards() if c["status"] != "Sold"]
             counts = {c["id"]: len(get_photo_paths(c["id"])) for c in cards}
-            cards.sort(key=lambda c: (counts[c["id"]] > 0, -c["id"]))
+            cards = sort_cards(cards, upload_sort, _load_json(META_PATH))
             rows = []
             for c in cards:
                 count = counts[c["id"]]
@@ -3902,18 +3917,9 @@ class CollectionView(View):
             if terms and not card_matches(c, terms):
                 continue
             out.append(c)
-        sort = dict(self.SORTS).get(self.sort_cb.get(), "new")
-        meta = self.app.meta
-        keys = {
-            "new": (lambda c: -c["id"]), "old": (lambda c: c["id"]),
-            "name": (lambda c: (c["name"].lower(), c["id"])),
-            "set": (lambda c: (c["set"].lower(), _split_code(c["number"]) or ("", 0), c["id"])),
-            "price": (lambda c: -c["price"]),
-            "market": (lambda c: -(market_price(meta, c["id"]) or -1)),
-            "delta": (lambda c: -((market_price(meta, c["id"]) or c["price"]) - c["price"])),
-        }
-        out.sort(key=keys[sort])
-        return out
+        global upload_sort
+        upload_sort = dict(self.SORTS).get(self.sort_cb.get(), "new")
+        return sort_cards(out, upload_sort, self.app.meta)
 
     def _update_filter_counts(self):
         counts = {k: 0 for k, _ in self.FILTERS}
