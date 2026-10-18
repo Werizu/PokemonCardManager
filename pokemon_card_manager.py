@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -1834,6 +1834,20 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <input id="q" type="search" placeholder="Suchen: Name, Set, Nummer" oninput="filter()">
 <div id="cards">{{CARDS}}</div>
 <script>
+// Alle 3 s nachsehen, ob sich am Mac etwas geändert hat (neue Karte, Foto, Sortierung).
+let state = '{{STATE}}';
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    const s = await (await fetch('/state', { cache: 'no-store' })).text();
+    if (s === state) return;
+    const html = await (await fetch('/', { cache: 'no-store' })).text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    document.getElementById('cards').innerHTML = doc.getElementById('cards').innerHTML;
+    state = s;
+    filter();
+  } catch (e) {}
+}, 3000);
 function filter() {
   const q = document.getElementById('q').value.toLowerCase();
   document.querySelectorAll('.card').forEach(c => {
@@ -1877,6 +1891,23 @@ function upload(cardId, btn) {
 </html>"""
 
 
+def upload_state():
+    """Kurzer Fingerabdruck von Inventar, Fotos und Sortierung für das Auto-Neuladen am Handy."""
+    parts = [upload_sort]
+    try:
+        parts.append(str(os.path.getmtime(EXCEL_PATH)))
+    except OSError:
+        pass
+    try:
+        for d in sorted(os.listdir(PHOTO_DIR)):
+            sub = os.path.join(PHOTO_DIR, d)
+            if os.path.isdir(sub):
+                parts.append(f"{d}:{len(os.listdir(sub))}")
+    except OSError:
+        pass
+    return hashlib.md5("|".join(parts).encode()).hexdigest()[:16]
+
+
 class PhotoUploadHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -1911,8 +1942,10 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
                     f'<div class="count{" ok" if count else ""}">{count_txt}</div></div>'
                     f'<button onclick="upload({c["id"]}, this)">Foto</button></div>'
                 )
-            page = _HTML_TEMPLATE.replace("{{CARDS}}", "".join(rows))
+            page = _HTML_TEMPLATE.replace("{{CARDS}}", "".join(rows)).replace("{{STATE}}", upload_state())
             self._send(200, page.encode(), "text/html; charset=utf-8")
+        elif self.path.split("?")[0] == "/state":
+            self._send(200, upload_state().encode())
         elif self.path.startswith("/img/"):
             card_id = _to_int(self.path.split("?")[0].split("/")[-1])
             path, _kind = card_image_path(_load_json(META_PATH), card_id) if card_id else (None, None)
