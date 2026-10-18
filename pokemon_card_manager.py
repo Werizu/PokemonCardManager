@@ -28,8 +28,9 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
+GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
 IS_MAC = sys.platform == "darwin"
 
@@ -2023,18 +2024,28 @@ def start_photo_server():
 SCRIPT_PATH = os.path.join(BASE_DIR, "pokemon_card_manager.py")
 
 
+def _version_tuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
 def check_for_update():
-    req = urllib.request.Request(GITHUB_RAW_URL, headers={"User-Agent": "PokemonCardManager"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        remote_content = resp.read()
-    with open(SCRIPT_PATH, "rb") as f:
-        local_hash = hashlib.sha256(f.read()).hexdigest()
-    remote_hash = hashlib.sha256(remote_content).hexdigest()
-    if local_hash == remote_hash:
-        return False, VERSION, None
+    # Die API liefert die Datei frisch; raw.githubusercontent.com hängt nach einem Push
+    # teils minutenlang hinterher und bleibt nur Ausweichweg (z. B. bei API-Limit).
+    try:
+        req = urllib.request.Request(GITHUB_API_URL, headers={"User-Agent": "PokemonCardManager",
+                                                              "Accept": "application/vnd.github.raw"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            remote_content = resp.read()
+    except Exception:
+        req = urllib.request.Request(GITHUB_RAW_URL, headers={"User-Agent": "PokemonCardManager"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            remote_content = resp.read()
     remote_text = remote_content.decode("utf-8", errors="replace")
     match = re.search(r'^VERSION\s*=\s*"([^"]+)"', remote_text, re.MULTILINE)
     remote_version = match.group(1) if match else "unknown"
+    # Nur echte neuere Versionen anbieten, sonst würde eine veraltete Kopie zurückstufen.
+    if _version_tuple(remote_version) <= _version_tuple(VERSION):
+        return False, VERSION, None
     return True, remote_version, remote_content
 
 
