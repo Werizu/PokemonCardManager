@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -5354,11 +5354,14 @@ class EditDialog(Dialog):
                     return
             extra = {"grading_service": self.service.get().strip(), "grade": grade, "cert": self.cert.get()}
         c = self.c
+        # Alle Werte lesen, bevor close() die Widgets zerstört (Combobox wirft danach TclError).
         url = self.url.get()
-        changed_lookup = (self.name.get(), self.set_cb.get(), self.number.get()) != (c["name"], c["set"], c["number"])
+        name, set_name, number = self.name.get(), self.set_cb.get().strip(), self.number.get()
+        lang, cond, source = self.lang.get(), self.cond.get(), self.source.get()
+        changed_lookup = (name, set_name, number) != (c["name"], c["set"], c["number"])
         self.close()
-        ok = self.app.mutate(edit_card, c["id"], self.name.get(), self.set_cb.get().strip(), self.number.get(),
-                             self.lang.get(), self.cond.get(), price, self.source.get(), qty,
+        ok = self.app.mutate(edit_card, c["id"], name, set_name, number,
+                             lang, cond, price, source, qty,
                              extra.get("grading_service"), extra.get("grade"), extra.get("cert"),
                              ok="Änderungen gespeichert", select=c["id"])
         if ok:
@@ -5369,7 +5372,7 @@ class EditDialog(Dialog):
                 # Name/Set/Nummer geaendert: Bild neu zuordnen lassen.
                 self.app.meta.pop(str(c["id"]), None)
                 self.app.ensure_images([self.app.by_id[c["id"]]], force=True)
-            elif self.lang.get() != c["language"] and m.get("match"):
+            elif lang != c["language"] and m.get("match"):
                 self.app.set_card_match(c["id"], m["match"], manual=m.get("status") == "manual")
 
 
