@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.4.2"
+VERSION = "2.5.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -515,6 +515,72 @@ def mark_card_sold(card_id, sale_price, platform, fees, sell_qty, shipping=0.0):
 
     wb.save(EXCEL_PATH)
     wb.close()
+
+
+# Gleiche Produkte aus mehreren Käufen (z. B. zwei ETBs zu verschiedenen Preisen) bleiben in
+# der Excel je eine Zeile, damit jeder Einkaufspreis exakt erhalten bleibt. In der App werden
+# sie zu einem Eintrag gruppiert. Anführer (lead) ist der älteste Kauf, verkauft wird FIFO.
+_lot_ids = {}   # lead-ID -> IDs aller Käufe der Gruppe (für Fotos/Vorschaubilder)
+
+
+def group_key(c):
+    return (c["name"].strip().lower(), c["set"].strip().lower(), str(c["number"]).strip().lower(),
+            c["language"], c["condition"], c["grading_status"], c["grading_service"], str(c["grade"]),
+            c["cert"], c["status"], bool(c["vormerkung"]))
+
+
+def group_cards(cards):
+    """Einträge für die Anzeige: Einzelkarten unverändert, Mehrfachkäufe als ein Eintrag mit "lots"."""
+    groups = {}
+    for c in cards:
+        key = ("sold", c["id"]) if c["status"] == "Sold" else group_key(c)
+        groups.setdefault(key, []).append(c)
+    entries = []
+    for lots in groups.values():
+        if len(lots) == 1:
+            entries.append(lots[0])
+            continue
+        lots = sorted(lots, key=lambda c: c["id"])
+        qty = sum(c["quantity"] for c in lots)
+        e = dict(lots[0])
+        e["lots"] = lots
+        e["quantity"] = qty
+        e["price"] = sum(c["price"] * c["quantity"] for c in lots) / qty if qty else lots[0]["price"]
+        e["sort_id"] = lots[-1]["id"]
+        entries.append(e)
+    global _lot_ids
+    _lot_ids = {e["id"]: [c["id"] for c in e["lots"]] for e in entries if "lots" in e}  # in einem Schritt, Server-Thread liest mit
+    entries.sort(key=lambda e: e["id"])
+    return entries
+
+
+def entry_photo_paths(card_id):
+    return [p for i in _lot_ids.get(card_id, [card_id]) for p in get_photo_paths(i)]
+
+
+def fifo_plan(entry, qty):
+    """[(Kauf, Stückzahl)] für einen Verkauf von qty Stück, älteste Käufe zuerst."""
+    plan = []
+    for lot in entry.get("lots", [entry]):
+        if qty <= 0:
+            break
+        n = min(qty, max(1, lot["quantity"]))
+        plan.append((lot, n))
+        qty -= n
+    return plan
+
+
+def sell_lots(plan, sale_price, platform, fees, shipping=0.0):
+    """Verkauf über mehrere Käufe: Erlös, Gebühren und Versand anteilig nach Stückzahl."""
+    total = sum(n for _lot, n in plan)
+    left = [sale_price, fees, shipping]
+    for i, (lot, n) in enumerate(plan):
+        if i == len(plan) - 1:
+            part = left
+        else:
+            part = [round(v * n / total, 2) for v in (sale_price, fees, shipping)]
+            left = [a - b for a, b in zip(left, part)]
+        mark_card_sold(lot["id"], round(part[0], 2), platform, round(part[1], 2), n, round(part[2], 2))
 
 
 def undo_sale(sale_row):
@@ -1534,8 +1600,8 @@ def market_price(meta, card_id):
 
 
 def card_image_path(meta, card_id):
-    """(Pfad, Art) des Titelbilds: nur eigene Fotos, offizielle Kartenbilder gibt es nicht mehr."""
-    photos = get_photo_paths(card_id)
+    """(Pfad, Art) des Titelbilds: nur eigene Fotos (bei Mehrfachkäufen aus allen Käufen)."""
+    photos = entry_photo_paths(card_id)
     if photos:
         return photos[0], "photo"
     return None, None
@@ -1793,7 +1859,7 @@ upload_events = queue.Queue()
 
 def sort_cards(cards, sort, meta):
     keys = {
-        "new": (lambda c: -c["id"]), "old": (lambda c: c["id"]),
+        "new": (lambda c: -c.get("sort_id", c["id"])), "old": (lambda c: c["id"]),
         "name": (lambda c: (c["name"].lower(), c["id"])),
         "set": (lambda c: (c["set"].lower(), _split_code(c["number"]) or ("", 0), c["id"])),
         "price": (lambda c: -c["price"]),
@@ -1923,14 +1989,16 @@ class PhotoUploadHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", ""):
-            cards = [c for c in load_all_cards() if c["status"] != "Sold"]
-            counts = {c["id"]: len(get_photo_paths(c["id"])) for c in cards}
+            cards = group_cards([c for c in load_all_cards() if c["status"] != "Sold"])
+            counts = {c["id"]: len(entry_photo_paths(c["id"])) for c in cards}
             cards = sort_cards(cards, upload_sort, _load_json(META_PATH))
             rows = []
             for c in cards:
                 count = counts[c["id"]]
                 e = html.escape
                 nr = f" · {e(c['number'])}" if c["number"] else ""
+                if "lots" in c:
+                    nr += f" · {c['quantity']}×"
                 search = e(f"{c['name']} {c['set']} {c['number']} {c['id']}".lower())
                 count_txt = f"{count} Foto{'s' if count != 1 else ''}" if count else "noch kein Foto"
                 rows.append(
@@ -2641,6 +2709,7 @@ class App:
         self.thumbs = ThumbCache(self.worker)
         self.toast = Toast(root)
         self.cards, self.sales, self.by_id = [], [], {}
+        self.entries, self.entry_by_id, self.lead_of = [], {}, {}
         self.current = None
         self.photo_server = photo_server
 
@@ -2784,7 +2853,7 @@ class App:
             name.config(fg=TEXT if sel else MUTED)
 
     def _update_counts(self):
-        stock = sum(1 for c in self.cards if c["status"] != "Sold")
+        stock = sum(1 for c in self.entries if c["status"] != "Sold")
         grading = sum(1 for c in self.cards if c["status"] != "Sold"
                       and (c["vormerkung"] or c["grading_status"] == "Submitted"))
         sales = sum(1 for s in self.sales)
@@ -2829,6 +2898,9 @@ class App:
         except Exception as e:
             messagebox.showerror("Fehler", f"Excel konnte nicht gelesen werden:\n{e}")
         self.by_id = {c["id"]: c for c in self.cards}
+        self.entries = group_cards(self.cards)
+        self.entry_by_id = {e["id"]: e for e in self.entries}
+        self.lead_of = {c["id"]: e["id"] for e in self.entries for c in e.get("lots", [])}
         self._update_counts()
         for v in self.views.values():
             v.dirty = True
@@ -2943,6 +3015,7 @@ class App:
         self.card_image_changed(card_id)
 
     def card_image_changed(self, card_id):
+        card_id = self.lead_of.get(card_id, card_id)
         v = self.views.get(self.current)
         if v:
             v.image_changed(card_id)
@@ -2992,11 +3065,20 @@ class App:
             q = urllib.parse.quote(f"{c['name']} {c['number']}".strip())
             webbrowser.open(f"https://www.cardmarket.com/de/Pokemon/Products/Search?searchString={q}")
 
+    def entry(self, card_id):
+        """Anzeige-Eintrag (bei Mehrfachkäufen die Gruppe) zu einer Karten-ID."""
+        return self.entry_by_id.get(self.lead_of.get(card_id, card_id)) or self.by_id.get(card_id)
+
     def edit(self, card_id):
+        e = self.entry_by_id.get(card_id)
+        if e and "lots" in e:
+            self.show_card(card_id)
+            self.toast.show("Mehrere Käufe: im Detail unter „Käufe“ einzeln bearbeiten", "info")
+            return
         EditDialog(self, self.by_id[card_id])
 
     def sell(self, card_id):
-        SellDialog(self, self.by_id[card_id])
+        SellDialog(self, self.entry(card_id))
 
     def ebay(self, card_id):
         cfg = _load_ebay_config()
@@ -3006,7 +3088,7 @@ class App:
                                    "Jetzt zu den Einstellungen wechseln?"):
                 self.show("settings")
             return
-        EbayDialog(self, self.by_id[card_id])
+        EbayDialog(self, self.entry(card_id))
 
     def toggle_queue(self, card_id):
         c = self.by_id[card_id]
@@ -3027,7 +3109,9 @@ class App:
             self.mutate(cancel_grading, card_id, ok="Einreichung zurückgenommen", select=card_id)
 
     def set_for_sale(self, card_id, on):
-        self.mutate(update_card_status, card_id, "For Sale" if on else "Collection",
+        ids = [c["id"] for c in self.entry(card_id).get("lots", [])] or [card_id]
+        status = "For Sale" if on else "Collection"
+        self.mutate(lambda: [update_card_status(i, status) for i in ids],
                     ok="Als „Zum Verkauf“ markiert" if on else "Wieder in der Sammlung", select=card_id)
 
     def add_photos(self, card_id):
@@ -3048,10 +3132,10 @@ class App:
                         "err" if failed else "ok")
 
     def view_images(self, card_id, start=0):
-        c = self.by_id.get(card_id)
+        c = self.entry(card_id)
         if not c:
             return
-        items = [(p, "photo") for p in get_photo_paths(card_id)]
+        items = [(p, "photo") for p in entry_photo_paths(c["id"])]
         if not items:
             self.toast.show("Noch kein Foto vorhanden", "info")
             return
@@ -3067,6 +3151,21 @@ class App:
         self.toast.show("Karte zugeordnet, Marktpreis wird geladen …", "info")
 
     def delete(self, card_id):
+        e = self.entry_by_id.get(card_id)
+        if e and "lots" in e:
+            n = len(e["lots"])
+            if not messagebox.askyesno("Eintrag löschen",
+                                       f"{e['name']}: alle {n} Käufe ({e['quantity']} Stück) löschen?\n\n"
+                                       "Fotos und Verkaufseinträge werden ebenfalls entfernt. "
+                                       "Das lässt sich nicht rückgängig machen.\n\n"
+                                       "Einzelne Käufe löschst du im Detail unter „Käufe“."):
+                return
+            ids = [c["id"] for c in e["lots"]]
+            if self.mutate(lambda: [delete_card(i) for i in ids], ok=f"{n} Käufe gelöscht"):
+                for i in ids:
+                    self.meta.pop(str(i), None)
+                self.save_meta_later()
+            return
         c = self.by_id[card_id]
         if not messagebox.askyesno("Karte löschen",
                                    f"#{card_id:03d} {c['name']} wirklich löschen?\n\n"
@@ -3077,8 +3176,18 @@ class App:
             self.meta.pop(str(card_id), None)
             self.save_meta_later()
 
+    def delete_lot(self, card_id):
+        c = self.by_id[card_id]
+        if not messagebox.askyesno("Kauf löschen",
+                                   f"Kauf #{card_id:03d} ({fmt_eur(c['price'])}, {fmt_date(c['purchase_date'])}) "
+                                   "löschen?\n\nFotos und Verkaufseinträge dieses Kaufs werden ebenfalls entfernt."):
+            return
+        if self.mutate(delete_card, card_id, ok=f"Kauf #{card_id:03d} gelöscht"):
+            self.meta.pop(str(card_id), None)
+            self.save_meta_later()
+
     def card_menu(self, card_id, event):
-        c = self.by_id.get(card_id)
+        c = self.entry(card_id)
         if not c:
             return
         menu = tk.Menu(self.root, tearoff=0)
@@ -3611,7 +3720,7 @@ class CardList(tk.Frame):
         if not self.tree.exists(str(cid)):
             return
         path, kind = self.app.image_for(cid)
-        c = self.app.by_id.get(cid)
+        c = self.app.entry(cid)
         if not c:
             return
         img = self.app.thumbs.get(path, 36, 50, kind or "card", c["status"] == "Sold", 4,
@@ -3642,7 +3751,7 @@ class DetailPanel(tk.Frame):
         self.card_id = card_id
         self._clear()
         self.scroll.to_top()
-        c = self.app.by_id.get(card_id) if card_id is not None else None
+        c = self.app.entry_by_id.get(card_id) if card_id is not None else None
         if not c:
             box = tk.Frame(self.inner, bg=SURFACE)
             box.pack(fill="x", padx=28, pady=120)
@@ -3689,7 +3798,8 @@ class DetailPanel(tk.Frame):
         Btn(links, "+ Foto", lambda: self.app.add_photos(cid), kind="ghost", small=True,
             bg=SURFACE).pack(side="left", padx=(4, 0))
 
-        photos = get_photo_paths(cid)
+        photos = entry_photo_paths(cid)
+        lots = c.get("lots")
         if photos:
             strip = tk.Frame(p, bg=SURFACE)
             strip.pack(fill="x", pady=(10, 0))
@@ -3711,7 +3821,8 @@ class DetailPanel(tk.Frame):
         # Titel
         tk.Label(p, text=c["name"] or "Ohne Namen", bg=SURFACE, fg=TEXT, font=F["lg_b"], anchor="w",
                  justify="left", wraplength=self.WIDTH - 50).pack(fill="x", pady=(16, 2))
-        sub = " · ".join(x for x in (f"#{cid:03d}", c["set"], c["number"], c["language"]) if x)
+        ref = f"{len(lots)} Käufe" if lots else f"#{cid:03d}"
+        sub = " · ".join(x for x in (ref, c["set"], c["number"], c["language"]) if x)
         tk.Label(p, text=sub, bg=SURFACE, fg=MUTED, font=F["sm"], anchor="w", justify="left",
                  wraplength=self.WIDTH - 50).pack(fill="x")
 
@@ -3735,7 +3846,7 @@ class DetailPanel(tk.Frame):
         qty = c["quantity"]
         raw_trend = market_price(self.app.meta, cid)
         trend = raw_trend if c["grading_status"] != "Graded" else None
-        cells = [("Kaufpreis / Stk", fmt_eur(c["price"]), TEXT),
+        cells = [("Ø Kaufpreis / Stk" if lots else "Kaufpreis / Stk", fmt_eur(c["price"]), TEXT),
                  ("Anzahl", "verkauft" if sold else str(qty), TEXT)]
         if not sold:
             cells.append(("Einkauf gesamt", fmt_eur(c["price"] * qty), TEXT))
@@ -3769,8 +3880,9 @@ class DetailPanel(tk.Frame):
                      justify="left", anchor="w", wraplength=self.WIDTH - 50).pack(fill="x", pady=(6, 0))
 
         # Details
-        rows = [("Zustand", c["condition"]), ("Quelle", c["source"] or "–"),
-                ("Gekauft am", fmt_date(c["purchase_date"]))]
+        rows = [("Zustand", c["condition"])]
+        if not lots:
+            rows += [("Quelle", c["source"] or "–"), ("Gekauft am", fmt_date(c["purchase_date"]))]
         if c["grading_status"] == "Submitted":
             rows.append(("Grading", f"eingereicht bei {c['grading_service']}"))
         if c["cert"]:
@@ -3786,6 +3898,9 @@ class DetailPanel(tk.Frame):
                 row=i, column=0, sticky="nw", pady=2)
             tk.Label(det, text=v, bg=SURFACE, fg=TEXT, font=F["sm"], anchor="w", justify="left",
                      wraplength=200).grid(row=i, column=1, sticky="nw", padx=(14, 0), pady=2)
+
+        if lots:
+            self._lots(p, lots)
 
         # Aktionen
         act = tk.Frame(p, bg=SURFACE)
@@ -3814,10 +3929,32 @@ class DetailPanel(tk.Frame):
             add("Verkäufe dieser Karte", lambda: self.app.show("sales", search=f"#{cid:03d}"))
         two = tk.Frame(act, bg=SURFACE)
         two.pack(fill="x", pady=(6, 0))
-        Btn(two, "Bearbeiten", lambda: self.app.edit(cid), kind="subtle", bg=SURFACE).pack(
-            side="left", fill="x", expand=True, padx=(0, 3))
-        Btn(two, "Löschen", lambda: self.app.delete(cid), kind="danger", bg=SURFACE).pack(
-            side="left", fill="x", expand=True, padx=(3, 0))
+        if not lots:
+            Btn(two, "Bearbeiten", lambda: self.app.edit(cid), kind="subtle", bg=SURFACE).pack(
+                side="left", fill="x", expand=True, padx=(0, 3))
+        Btn(two, "Alle Käufe löschen" if lots else "Löschen", lambda: self.app.delete(cid),
+            kind="danger", bg=SURFACE).pack(side="left", fill="x", expand=True, padx=(0 if lots else 3, 0))
+
+    def _lots(self, p, lots):
+        """Liste der einzelnen Käufe eines Mehrfach-Eintrags, älteste zuerst (wird zuerst verkauft)."""
+        tk.Label(p, text=f"KÄUFE · {len(lots)}", bg=SURFACE, fg=FAINT, font=F["xs_b"]).pack(
+            anchor="w", pady=(18, 6))
+        box = tk.Frame(p, bg=SURFACE2)
+        box.pack(fill="x")
+        for i, lot in enumerate(lots):
+            row = tk.Frame(box, bg=SURFACE2)
+            row.pack(fill="x", padx=12, pady=(10 if i == 0 else 4, 10 if i == len(lots) - 1 else 4))
+            qty = f"{lot['quantity']}× " if lot["quantity"] != 1 else ""
+            tk.Label(row, text=f"{qty}{fmt_eur(lot['price'])}", bg=SURFACE2, fg=TEXT,
+                     font=F["body_b"]).pack(side="left")
+            info = " · ".join(x for x in (fmt_date(lot["purchase_date"]), lot["source"], f"#{lot['id']:03d}") if x)
+            tk.Label(row, text=info, bg=SURFACE2, fg=MUTED, font=F["xs"]).pack(side="left", padx=(10, 0))
+            Btn(row, "✕", lambda i=lot["id"]: self.app.delete_lot(i), kind="ghost", small=True,
+                bg=SURFACE2).pack(side="right")
+            Btn(row, "Bearbeiten", lambda l=lot: EditDialog(self.app, l), kind="ghost", small=True,
+                bg=SURFACE2).pack(side="right")
+        tk.Label(p, text="Beim Verkauf geht der oberste (älteste) Kauf zuerst raus.", bg=SURFACE, fg=FAINT,
+                 font=F["xs"], anchor="w").pack(fill="x", pady=(6, 0))
 
 
 class CollectionView(View):
@@ -3897,7 +4034,7 @@ class CollectionView(View):
         f = self.filter_chips.get()
         terms = [t for t in self.search.get().lower().split() if t]
         out = []
-        for c in self.app.cards:
+        for c in self.app.entries:
             sold = c["status"] == "Sold"
             if f == "stock" and sold:
                 continue
@@ -3920,7 +4057,7 @@ class CollectionView(View):
 
     def _update_filter_counts(self):
         counts = {k: 0 for k, _ in self.FILTERS}
-        for c in self.app.cards:
+        for c in self.app.entries:
             sold = c["status"] == "Sold"
             counts["all"] += 1
             if sold:
@@ -3954,7 +4091,7 @@ class CollectionView(View):
             self.gallery.set_items(self.items, empty)
         else:
             self.list.set_items(self.items, self.selected)
-        if self.selected is not None and self.selected not in self.app.by_id:
+        if self.selected is not None and self.selected not in self.app.entry_by_id:
             self.selected = None
         self.detail.show(self.selected)
 
@@ -3986,6 +4123,7 @@ class CollectionView(View):
 
     def reveal(self, cid):
         """Karte anzeigen, notfalls Filter/Suche zuruecksetzen."""
+        cid = self.app.lead_of.get(cid, cid)
         if cid not in {c["id"] for c in self.items}:
             self.search.set("")
             self.filter_chips.set("all")
@@ -5086,7 +5224,7 @@ class SellDialog(Dialog):
         except ValueError:
             self.result.config(text="Preis eintragen, dann siehst du hier den Gewinn.", fg=MUTED)
             return
-        cost = self.c["price"] * qty
+        cost = sum(lot["price"] * n for lot, n in fifo_plan(self.c, qty))
         profit = price - fees - ship - cost
         if self.platform.get() == "Trade":
             self.result.config(text="Tausch: zählt nicht zu Umsatz und Gewinn.", fg=MUTED)
@@ -5107,6 +5245,10 @@ class SellDialog(Dialog):
         self.app.config["last_platform"] = self.platform.get()
         cid = self.c["id"]
         self.close()
+        if "lots" in self.c:
+            self.app.mutate(sell_lots, fifo_plan(self.c, qty), price, self.platform.get(), fees, ship,
+                            ok=f"Verkauf gespeichert: {fmt_eur(price)}", select=cid)
+            return
         self.app.mutate(mark_card_sold, cid, price, self.platform.get(), fees, qty, ship,
                         ok=f"Verkauf gespeichert: {fmt_eur(price)}", select=cid)
 

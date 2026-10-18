@@ -14,6 +14,7 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 - **Statistics**: stock, total invested, market value, unrealized and realized gain, purchases per month, value by set, most valuable cards
 - **Partial selling** with live profit preview; platforms Cardmarket, eBay, Whatnot, Trade, Other
 - **eBay integration**: create draft listings or publish directly (fixed price with Best Offer, or auction)
+- **Repeat purchases** of the same product (e.g. two ETBs at different prices) show as one entry with total quantity and average price; each purchase keeps its own row and price, sales use the oldest purchase first (FIFO)
 - **Photo upload** from your phone via local WiFi (built-in web page with search and thumbnails)
 - **Keyboard shortcuts**: Cmd+1 to Cmd+6 switch sections, Cmd+N add, Cmd+F search, Cmd+R reload, arrow keys move through the gallery, Space shows the image large
 - **Auto-update** from GitHub, **Excel-based storage**: your data lives in a standard `.xlsx` file you can open anytime
