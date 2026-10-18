@@ -57,9 +57,9 @@ Double-click **Poke Inv** on your Desktop, or run:
 ### Photos
 
 When the app is running, it starts a local web server for phone uploads:
-1. The upload URL is shown at the bottom of the sidebar (e.g. `http://192.168.1.x:8080`); click it to copy
-2. Open that URL on your phone (same WiFi network)
-3. Select the card ID and upload a photo
+1. A QR code and the upload URL are shown at the bottom of the sidebar (e.g. `http://192.168.1.x:8080`); click either to copy the URL
+2. Scan the QR code with your phone camera (same WiFi network)
+3. Find the card and tap „Foto“ to take or pick a photo
 
 ### Selling Cards
 
