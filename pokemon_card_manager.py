@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.5.3"
+VERSION = "2.5.4"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -5463,16 +5463,22 @@ class EbayDialog(Dialog):
         self.fixed.grid(row=3, column=0, columnspan=2, sticky="ew")
         self.fixed.columnconfigure(0, weight=1)
         self.fixed.columnconfigure(1, weight=1)
-        self.label(self.fixed, "PREIS", 0, 0)
+        self.label(self.fixed, "PREIS PRO STÜCK", 0, 0)
         self.label(self.fixed, f"ANZAHL (von {max(1, c['quantity'])})", 0, 1)
         start = trend if trend else c["price"]
         self.price = Field(self.fixed, width=10, value=f"{start:.2f}".replace(".", ",") if start else "", suffix="€")
         self.price.grid(row=1, column=0, sticky="ew", padx=(0, 10))
         self.qty = Field(self.fixed, width=6, value=str(max(1, c["quantity"])))
         self.qty.grid(row=1, column=1, sticky="w")
+        # eBay-Preis gilt je Stück; die Gesamtsumme zeigen, damit keiner den Gesamtpreis einträgt.
+        self.total = tk.Label(self.fixed, text="", bg=SURFACE, fg=MUTED, font=F["sm_b"], anchor="w")
+        self.total.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        for f in (self.price, self.qty):
+            f.var.trace_add("write", lambda *_: self._update_total())
+        self._update_total()
         if trend:
-            tk.Label(self.fixed, text=f"Vorschlag = Cardmarket-Trend ({fmt_eur(trend)}), Einkauf war {fmt_eur(c['price'])}",
-                     bg=SURFACE, fg=FAINT, font=F["xs"]).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            tk.Label(self.fixed, text=f"Vorschlag = Cardmarket-Trend je Stück ({fmt_eur(trend)}), Einkauf war {fmt_eur(c['price'])}",
+                     bg=SURFACE, fg=FAINT, font=F["xs"]).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self.auction = tk.Frame(b, bg=SURFACE)
         self.auction.columnconfigure(0, weight=1)
         self.auction.columnconfigure(1, weight=1)
@@ -5532,6 +5538,19 @@ class EbayDialog(Dialog):
             msg = str(e) if "muss" in str(e) or "zwischen" in str(e) else "Bitte gültige Zahlen eintragen."
             messagebox.showwarning("Ungültig", msg, parent=self)
             return None
+
+    def _update_total(self):
+        try:
+            qty = int(self.qty.get())
+            price = parse_eur(self.price.get())
+        except (ValueError, TypeError):
+            self.total.config(text="")
+            return
+        if qty > 1 and price > 0:
+            self.total.config(text=f"Käufer zahlen {fmt_eur(price)} pro Stück · "
+                                   f"alle {qty} zusammen {fmt_eur(price * qty)}")
+        else:
+            self.total.config(text="")
 
     def _create(self, publish):
         params = self._validate()
