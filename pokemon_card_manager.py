@@ -28,7 +28,7 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.5.2"
+VERSION = "2.5.3"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
 GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
 
@@ -917,51 +917,39 @@ def _ebay_api(method, path, body=None):
 
 
 def _ebay_upload_image(image_path):
+    """Foto über die Media API zu eBay hochladen. Der alte Trading-API-Weg
+    (UploadSiteHostedPictures) liefert seit Nov 2026 nur noch 404."""
     token = _ebay_token()
     if not token:
         raise Exception("Not connected to eBay.")
     cfg = _load_ebay_config()
-    url = "https://api.ebay.com/ws/api.dll"
-    if cfg.get("sandbox"):
-        url = "https://api.sandbox.ebay.com/ws/api.dll"
+    host = "https://apim.sandbox.ebay.com" if cfg.get("sandbox") else "https://apim.ebay.com"
 
     boundary = "----FormBoundary7MA4YWxkTrZu0gW"
-    xml_part = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
-        f'<RequesterCredentials><eBayAuthToken>{token}</eBayAuthToken></RequesterCredentials>'
-        '<PictureName>card</PictureName>'
-        '</UploadSiteHostedPicturesRequest>'
-    )
-
     with open(image_path, "rb") as f:
         image_data = f.read()
-
     ext = os.path.splitext(image_path)[1].lower()
     mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
-
     body = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="XML Payload"\r\n'
-        f"Content-Type: text/xml\r\n\r\n"
-        f"{xml_part}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="card{ext}"\r\n'
+        f'Content-Disposition: form-data; name="image"; filename="card{ext}"\r\n'
         f"Content-Type: {mime}\r\n\r\n"
     ).encode() + image_data + f"\r\n--{boundary}--\r\n".encode()
 
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "X-EBAY-API-SITEID": "77",
-        "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-    })
-    with urllib.request.urlopen(req) as resp:
-        raw = resp.read().decode()
-    match = re.search(r"<FullURL>(.+?)</FullURL>", raw)
-    if match:
-        return match.group(1)
-    raise Exception(f"Image upload failed: {raw[:300]}")
+    req = urllib.request.Request(
+        f"{host}/commerce/media/v1_beta/image/create_image_from_file",
+        data=body, method="POST", headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        })
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise Exception(f"eBay-Foto-Upload fehlgeschlagen ({e.code}): {e.read().decode()[:300]}")
+    if result.get("imageUrl"):
+        return result["imageUrl"]
+    raise Exception(f"Image upload failed: {str(result)[:300]}")
 
 
 def _ebay_fetch_policies():
