@@ -17,7 +17,7 @@ A macOS desktop app for managing your Pokemon card collection. Track inventory, 
 - **Repeat purchases** of the same product (e.g. two ETBs at different prices) show as one entry with total quantity and average price; each purchase keeps its own row and price, sales use the oldest purchase first (FIFO)
 - **Photo upload** from your phone via local WiFi (built-in web page with search and thumbnails)
 - **Keyboard shortcuts**: Cmd+1 to Cmd+6 switch sections, Cmd+N add, Cmd+F search, Cmd+R reload, arrow keys move through the gallery, Space shows the image large
-- **Auto-update** from GitHub, **Excel-based storage**: your data lives in a standard `.xlsx` file you can open anytime
+- **Signed auto-update** from the own update server, **Excel-based storage**: your data lives in a standard `.xlsx` file you can open anytime
 
 ## Requirements
 
@@ -125,7 +125,9 @@ The app automatically handles:
 
 ## Auto-Update
 
-The app checks for updates on startup; you can also click **Nach Updates suchen** in **Einstellungen** to check for a newer version on GitHub. If an update is available, the app downloads the latest code and restarts automatically.
+The app checks for updates on startup; you can also click **Nach Updates suchen** in **Einstellungen** to check for a newer version. Updates come from `updates.heckserver.de` (not GitHub): access needs the token in `~/Pokemon-Sammlung/.update_token` (written by `install.sh` from the tresor), and every update is checked against an Ed25519 signature and a SHA-256 checksum before it is installed. If an update is available, the app downloads it and restarts automatically.
+
+Publishing a new version: bump `VERSION`, then run `18_Homelab/gateway/updates/veroeffentlichen.sh pokemon pokemon_card_manager.py`.
 
 Only the application code is updated — your data is never touched:
 

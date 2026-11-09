@@ -28,9 +28,11 @@ from urllib.parse import parse_qs
 from openpyxl import load_workbook
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance
 
-VERSION = "2.5.4"
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/Werizu/PokemonCardManager/main/pokemon_card_manager.py"
-GITHUB_API_URL = "https://api.github.com/repos/Werizu/PokemonCardManager/contents/pokemon_card_manager.py?ref=main"
+VERSION = "2.6.0"
+# Updates kommen vom eigenen Server (VPS gateway), nicht mehr von GitHub. Zugang per Token
+# (Datei .update_token im Datenordner), Echtheit per Ed25519-Signatur mit diesem Schlüssel.
+UPDATE_BASE_URL = "https://updates.heckserver.de/pokemon/"
+UPDATE_PUBLIC_KEY = bytes.fromhex("299287a9541286f5ca930f652d9de0316143db3def3d31b5e06ee7f878653c97")
 
 IS_MAC = sys.platform == "darwin"
 
@@ -2118,30 +2120,141 @@ def _version_tuple(v):
     return tuple(int(x) for x in re.findall(r"\d+", v or ""))
 
 
+# Ed25519-Prüfung nach RFC 8032 (nur Verifizieren), ohne Zusatzpaket, weil das Update
+# nur diese Datei austauscht und keine neuen Abhängigkeiten installieren kann.
+_ED_P = 2 ** 255 - 19
+_ED_L = 2 ** 252 + 27742317777372353535851937790883648493
+_ED_D = -121665 * pow(121666, _ED_P - 2, _ED_P) % _ED_P
+_ED_SQRT_M1 = pow(2, (_ED_P - 1) // 4, _ED_P)
+
+
+def _ed_add(a, b):
+    x1, y1, z1, t1 = a
+    x2, y2, z2, t2 = b
+    p = _ED_P
+    A = (y1 - x1) * (y2 - x2) % p
+    B = (y1 + x1) * (y2 + x2) % p
+    C = t1 * 2 * _ED_D * t2 % p
+    D = z1 * 2 * z2 % p
+    E, F, G, H = B - A, D - C, D + C, B + A
+    return (E * F % p, G * H % p, F * G % p, E * H % p)
+
+
+def _ed_mul(k, point):
+    q = (0, 1, 1, 0)
+    while k > 0:
+        if k & 1:
+            q = _ed_add(q, point)
+        point = _ed_add(point, point)
+        k >>= 1
+    return q
+
+
+def _ed_equal(a, b):
+    p = _ED_P
+    return (a[0] * b[2] - b[0] * a[2]) % p == 0 and (a[1] * b[2] - b[1] * a[2]) % p == 0
+
+
+def _ed_recover_x(y, sign):
+    p = _ED_P
+    if y >= p:
+        return None
+    x2 = (y * y - 1) * pow(_ED_D * y * y + 1, p - 2, p) % p
+    if x2 == 0:
+        return None if sign else 0
+    x = pow(x2, (p + 3) // 8, p)
+    if (x * x - x2) % p != 0:
+        x = x * _ED_SQRT_M1 % p
+    if (x * x - x2) % p != 0:
+        return None
+    if (x & 1) != sign:
+        x = p - x
+    return x
+
+
+def _ed_decompress(b):
+    if len(b) != 32:
+        return None
+    y = int.from_bytes(b, "little")
+    sign = y >> 255
+    y &= (1 << 255) - 1
+    x = _ed_recover_x(y, sign)
+    if x is None:
+        return None
+    return (x, y, 1, x * y % _ED_P)
+
+
+_ED_GY = 4 * pow(5, _ED_P - 2, _ED_P) % _ED_P
+_ED_G = (_ed_recover_x(_ED_GY, 0), _ED_GY, 1, _ed_recover_x(_ED_GY, 0) * _ED_GY % _ED_P)
+
+
+def ed25519_verify(public_key, message, signature):
+    if len(public_key) != 32 or len(signature) != 64:
+        return False
+    a = _ed_decompress(public_key)
+    r = _ed_decompress(signature[:32])
+    if a is None or r is None:
+        return False
+    s = int.from_bytes(signature[32:], "little")
+    if s >= _ED_L:
+        return False
+    h = int.from_bytes(hashlib.sha512(signature[:32] + public_key + message).digest(), "little") % _ED_L
+    return _ed_equal(_ed_mul(s, _ED_G), _ed_add(r, _ed_mul(h, a)))
+
+
+UPDATE_TOKEN_PATH = os.path.join(BASE_DIR, ".update_token")
+
+
+def _update_get(name, token):
+    req = urllib.request.Request(UPDATE_BASE_URL + name, headers={
+        "User-Agent": f"PokeInv/{VERSION}", "Authorization": f"Bearer {token}", "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read()
+
+
 def check_for_update():
-    # Die API liefert die Datei frisch; raw.githubusercontent.com hängt nach einem Push
-    # teils minutenlang hinterher und bleibt nur Ausweichweg (z. B. bei API-Limit).
     try:
-        req = urllib.request.Request(GITHUB_API_URL, headers={"User-Agent": "PokemonCardManager",
-                                                              "Accept": "application/vnd.github.raw"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            remote_content = resp.read()
-    except Exception:
-        req = urllib.request.Request(GITHUB_RAW_URL, headers={"User-Agent": "PokemonCardManager"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            remote_content = resp.read()
-    remote_text = remote_content.decode("utf-8", errors="replace")
-    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', remote_text, re.MULTILINE)
-    remote_version = match.group(1) if match else "unknown"
+        with open(UPDATE_TOKEN_PATH, encoding="utf-8") as f:
+            token = f.read().strip()
+    except OSError:
+        token = ""
+    if not token:
+        raise RuntimeError(f"Update-Token fehlt ({UPDATE_TOKEN_PATH}).")
+    try:
+        outer = json.loads(_update_get("update.json", token))
+        manifest_raw = base64.b64decode(outer["manifest"], validate=True)
+        signature = base64.b64decode(outer["signature"], validate=True)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise RuntimeError("Update-Server lehnt das Token ab.") from None
+        raise
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError("Update-Server lieferte eine ungültige Antwort.") from None
+    if not ed25519_verify(UPDATE_PUBLIC_KEY, manifest_raw, signature):
+        raise RuntimeError("Signatur des Updates ist ungültig, Update abgelehnt.")
+    manifest = json.loads(manifest_raw)
+    remote_version = str(manifest.get("version", ""))
+    file_name = str(manifest.get("file", ""))
+    if manifest.get("app") != "pokemon" or not re.fullmatch(r"[A-Za-z0-9._-]+", file_name):
+        raise RuntimeError("Update-Manifest passt nicht zu dieser App.")
     # Nur echte neuere Versionen anbieten, sonst würde eine veraltete Kopie zurückstufen.
     if _version_tuple(remote_version) <= _version_tuple(VERSION):
         return False, VERSION, None
-    return True, remote_version, remote_content
+    content = _update_get(file_name, token)
+    if hashlib.sha256(content).hexdigest() != manifest.get("sha256"):
+        raise RuntimeError("Prüfsumme des Updates stimmt nicht, Update abgelehnt.")
+    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', content.decode("utf-8", errors="replace"), re.MULTILINE)
+    if not match or match.group(1) != remote_version:
+        raise RuntimeError("Versionsnummer im Update passt nicht zum Manifest.")
+    return True, remote_version, content
 
 
 def apply_update(content):
-    with open(SCRIPT_PATH, "wb") as f:
+    # Erst daneben schreiben, dann tauschen: ein Abbruch hinterlässt nie eine halbe App
+    tmp = SCRIPT_PATH + ".neu"
+    with open(tmp, "wb") as f:
         f.write(content)
+    os.replace(tmp, SCRIPT_PATH)
 
 
 def restart_app():

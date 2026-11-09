@@ -81,6 +81,18 @@ mkdir -p "$APP_DIR/Fotos"
 mkdir -p "$APP_DIR/Karten"
 echo "✓ Created $APP_DIR"
 
+# ── 5b. Update token (updates come from updates.heckserver.de, token from the tresor) ──
+if [ ! -s "$APP_DIR/.update_token" ]; then
+    if command -v tresor &> /dev/null && (umask 077; tresor get pokemon_update_token 2>/dev/null > "$APP_DIR/.update_token") && [ -s "$APP_DIR/.update_token" ]; then
+        echo "✓ Stored update token"
+    else
+        rm -f "$APP_DIR/.update_token"
+        echo "⚠ No update token: put it into $APP_DIR/.update_token for auto-updates"
+    fi
+else
+    echo "✓ Update token exists"
+fi
+
 # ── 6. Copy app script ──
 cp "$SCRIPT_DIR/pokemon_card_manager.py" "$APP_DIR/pokemon_card_manager.py"
 echo "✓ Copied app script"
